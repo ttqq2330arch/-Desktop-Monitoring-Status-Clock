@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 780" width="100%" role="img">
+<title>pc-monitor 接线图：ESP32-WROOM-32 + ST7735S LCD + 3 按键</title>
+<desc>ESP32 与 ST7735S 128x160 LCD 的 SPI 接线、三个轻触按键接线、USB 串口供电说明与禁用引脚备注</desc>
+<rect x="0" y="0" width="680" height="780" fill="#FFFFFF"/>
+<text x="340" y="34" text-anchor="middle" font-family="sans-serif" font-size="16" font-weight="500" fill="#2C2C2A">pc-monitor 接线图（ESP32-WROOM-32 + ST7735S 128×160）</text>
+<text x="340" y="54" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#5F5E5A">3 开关版固件：GPIO13=监控页　GPIO14=时钟页　GPIO27=日历页</text>
+
+<rect x="70" y="70" width="170" height="330" rx="10" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="155" y="90" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">ESP32-WROOM-32</text>
+<text x="155" y="106" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">30/38Pin 开发板</text>
+
+<rect x="470" y="70" width="170" height="330" rx="10" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="555" y="90" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#085041">ST7735S LCD</text>
+<text x="555" y="106" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#0F6E56">128×160 SPI 屏</text>
+
+<g font-family="sans-serif" font-size="12" fill="#2C2C2A">
+<text x="230" y="131" text-anchor="end">3V3</text>
+<text x="230" y="161" text-anchor="end">GND</text>
+<text x="230" y="191" text-anchor="end">GPIO18</text>
+<text x="230" y="221" text-anchor="end">GPIO23</text>
+<text x="230" y="251" text-anchor="end">GPIO5</text>
+<text x="230" y="281" text-anchor="end">GPIO17</text>
+<text x="230" y="311" text-anchor="end">GPIO16</text>
+<text x="230" y="341" text-anchor="end">GPIO4</text>
+</g>
+<g font-family="sans-serif" font-size="12" fill="#2C2C2A">
+<text x="480" y="131">VCC</text>
+<text x="480" y="161">GND</text>
+<text x="480" y="191">SCK / SCL</text>
+<text x="480" y="221">MOSI / SDA</text>
+<text x="480" y="251">CS</text>
+<text x="480" y="281">DC / A0</text>
+<text x="480" y="311">RST</text>
+<text x="480" y="341">BLK / LED</text>
+</g>
+
+<g stroke-width="1.5" fill="none">
+<line x1="236" y1="127" x2="474" y2="127" stroke="#D85A30"/>
+<line x1="236" y1="157" x2="474" y2="157" stroke="#444441"/>
+<line x1="236" y1="187" x2="474" y2="187" stroke="#534AB7"/>
+<line x1="236" y1="217" x2="474" y2="217" stroke="#1D9E75"/>
+<line x1="236" y1="247" x2="474" y2="247" stroke="#378ADD"/>
+<line x1="236" y1="277" x2="474" y2="277" stroke="#BA7517"/>
+<line x1="236" y1="307" x2="474" y2="307" stroke="#D4537E"/>
+<line x1="236" y1="337" x2="474" y2="337" stroke="#639922"/>
+</g>
+<g>
+<circle cx="236" cy="127" r="3" fill="#D85A30"/><circle cx="474" cy="127" r="3" fill="#D85A30"/>
+<circle cx="236" cy="157" r="3" fill="#444441"/><circle cx="474" cy="157" r="3" fill="#444441"/>
+<circle cx="236" cy="187" r="3" fill="#534AB7"/><circle cx="474" cy="187" r="3" fill="#534AB7"/>
+<circle cx="236" cy="217" r="3" fill="#1D9E75"/><circle cx="474" cy="217" r="3" fill="#1D9E75"/>
+<circle cx="236" cy="247" r="3" fill="#378ADD"/><circle cx="474" cy="247" r="3" fill="#378ADD"/>
+<circle cx="236" cy="277" r="3" fill="#BA7517"/><circle cx="474" cy="277" r="3" fill="#BA7517"/>
+<circle cx="236" cy="307" r="3" fill="#D4537E"/><circle cx="474" cy="307" r="3" fill="#D4537E"/>
+<circle cx="236" cy="337" r="3" fill="#639922"/><circle cx="474" cy="337" r="3" fill="#639922"/>
+</g>
+
+<g font-family="sans-serif" font-size="12" font-weight="500" fill="#2C2C2A">
+<text x="100" y="392" text-anchor="middle">GPIO13</text>
+<text x="155" y="392" text-anchor="middle">GPIO14</text>
+<text x="210" y="392" text-anchor="middle">GPIO27</text>
+</g>
+<g stroke="#888780" stroke-width="1.5" fill="none">
+<polyline points="100,398 100,470"/>
+<polyline points="155,398 155,440 235,440 235,470"/>
+<polyline points="210,398 210,415 350,415 350,470"/>
+</g>
+<g font-family="sans-serif" font-size="11" fill="#5F5E5A">
+<text x="108" y="430" text-anchor="start">第1页</text>
+<text x="243" y="436" text-anchor="start">第2页</text>
+<text x="358" y="411" text-anchor="start">第3页</text>
+</g>
+
+<g font-family="sans-serif" text-anchor="middle">
+<rect x="70" y="470" width="100" height="52" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+<text x="120" y="491" font-size="13" font-weight="500" fill="#2C2C2A">按键 UP</text>
+<text x="120" y="509" font-size="11" fill="#5F5E5A">另一端→GND</text>
+<rect x="185" y="470" width="100" height="52" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+<text x="235" y="491" font-size="13" font-weight="500" fill="#2C2C2A">按键 DOWN</text>
+<text x="235" y="509" font-size="11" fill="#5F5E5A">另一端→GND</text>
+<rect x="300" y="470" width="100" height="52" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+<text x="350" y="491" font-size="13" font-weight="500" fill="#2C2C2A">按键 OK</text>
+<text x="350" y="509" font-size="11" fill="#5F5E5A">另一端→GND</text>
+</g>
+
+<line x1="70" y1="560" x2="400" y2="560" stroke="#444441" stroke-width="1.5"/>
+<g stroke="#444441" stroke-width="1.5" fill="none">
+<line x1="120" y1="522" x2="120" y2="560"/>
+<line x1="235" y1="522" x2="235" y2="560"/>
+<line x1="350" y1="522" x2="350" y2="560"/>
+</g>
+<text x="410" y="564" font-family="sans-serif" font-size="12" fill="#444441">GND 公共地</text>
+
+<rect x="70" y="600" width="240" height="46" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="190" y="618" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">USB 线 → CH340 → GPIO1/3</text>
+<text x="190" y="635" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">PC 串口通信 + 5V 供电，无需另接电源</text>
+
+<g font-family="sans-serif" font-size="12" fill="#2C2C2A">
+<text x="70" y="672" font-size="13" font-weight="500" fill="#2C2C2A">注意事项</text>
+<text x="70" y="696">· 按键为 2 脚轻触开关，不分正负：一脚接 GPIO，另一脚接 GND（固件已用内部上拉，无需电阻）</text>
+<text x="70" y="718">· 背光 BLK 接 GPIO4（LEDC PWM 调光），不要把按键接到 GPIO4，会撞背光</text>
+<text x="70" y="740">· 禁用引脚：0/2/12/15（strapping，开机状态脚）、6-11（Flash 占用）、1/3（串口）、34-39（仅输入）</text>
+<text x="70" y="762">· LCD 供电 3.3V；若屏幕发白/不亮，先查 GND 是否共地、VCC 是否接 3V3 而非 5V</text>
+</g>
+</svg>

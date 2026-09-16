@@ -1,0 +1,22 @@
+# 统一行尾，避免 Windows / macOS / Linux clone 之后 diff 爆炸
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd 可能解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制资源，Git 不要尝试做行尾或编码转换
+*.png binary
+*.ttf binary
+*.otf binary
+*.bin binary
+*.elf binary
+*.zip binary
+*.svg text
+
+# 生成物：GitHub 折叠这些文件的 diff，语言统计也不计入
+esp32/src/mc_theme.h      linguist-generated=true
+esp32/src/clock_fonts.h   linguist-generated=true
+esp32/src/cn_font.h       linguist-generated=true
+esp32/src/weather_cn.h    linguist-generated=true
+esp32/src/cn_city.h       linguist-generated=true

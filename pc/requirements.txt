@@ -1,0 +1,4 @@
+psutil>=5.9.0
+pyserial>=3.5
+# GPU 读取用官方包；老包名 pynvml 已弃用，别装它，会刷 FutureWarning
+nvidia-ml-py>=12.0.0

@@ -1,0 +1,47 @@
+# ---- PlatformIO / 编译产物 ----
+.pio/
+.pioenvs/
+.piolibdeps/
+# 第三方库源码不入库，靠 platformio.ini 的 lib_deps 自动拉取
+lib/
+*.elf
+*.bin
+*.map
+*.o
+*.d
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- PyInstaller 便携版产物 ----
+pc/dist/
+build/
+*.spec
+
+# ---- 运行时配置与缓存（只提交 weather_tune.example.json）----
+pc/weather_tune.json
+pc/weather_cache.json
+pc/install_result.txt
+pause.flag
+
+# ---- 日志 ----
+*.log
+
+# ---- 设计稿生成器的中间产物（docs/img/ 下的精选图不受影响）----
+esp32/tools/*.png
+esp32/tools/*.txt
+esp32/tools/*.log
+esp32/tools/fonts/*.ttf
+!esp32/tools/fonts/Fredoka_wdth_wght.ttf
+!esp32/tools/fonts/Nunito_wght.ttf
+!esp32/tools/fonts/Poppins-Bold.ttf
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+
+# ---- 备份文件 ----
+*.bak
+*.bak*
+*.old
