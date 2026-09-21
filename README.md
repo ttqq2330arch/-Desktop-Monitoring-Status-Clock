@@ -1,19 +1,23 @@
 # 桌面电脑状态监控 · PC 小屏
 
 ESP32-WROOM-32 DevKit V1（CH340C）+ ST7735S 128×160 横放（逻辑 160×128）。
-PC 端采集本机状态 → USB 串口 1Hz 推 JSON → ESP32 只负责显示。
+PC 端采集本机状态 → USB 串口 1Hz 推 JSON → ESP32 负责显示。
 
-四页：**总览（《我的世界》主题）/ 大时钟 / 日历 / 天气**，单个按键 GPIO13 循环切换。
+三页：**总览 / 大时钟 / 天气**，单个按键 GPIO13 循环切换；PC 在线时三页每 10 秒自动轮播。
 
-**状态：固件已编译通过并烧录成功（2026-09-16，430,448 B，Flash 占用 32.8%，RAM 9.0%）。**
+**★ 脱离电脑也能当钟用**：设备自带 2.4G WiFi + SNTP 对时，不接电脑时会自动进时钟页
+并显示**正确时间**（不再是一块显示「NO DATA」的砖）。配置见「二 · 6 不接电脑也能用」。
+总览页与天气页的数据仍来自 PC。
+
+**状态：固件已编译通过（2026-09-19，931,536 B / Flash 70.6% / RAM 16.3%，0 warning；
+已删除日历页、新增三页 10 秒自动轮播、新增 WiFi 独立对时）。**
 
 <p align="center">
   <img src="docs/img/st_full_4x.png" width="32%">
   <img src="docs/img/flipclock_preview.png" width="32%">
-  <img src="docs/img/calendar_cn_preview.png" width="32%">
 </p>
 <p align="center"><sub>
-状态页（《我的世界》主题）　｜　翻页时钟　｜　日历
+状态页（四环仪表）　｜　翻页时钟
 </sub></p>
 
 <p align="center">
@@ -43,7 +47,7 @@ PC 端采集本机状态 → USB 串口 1Hz 推 JSON → ESP32 只负责显示�
 | BLK | GPIO4 | 背光，LEDC PWM 调光（默认 78%） |
 | MISO | 不接 | |
 
-按键：**GPIO13 → GND**（内部上拉），短按切页，长按 >700ms 切换时钟页数字字体。
+按键：**GPIO13 → GND**（内部上拉），短按切页（并重置 10 秒轮播计时），长按 >600ms 切换时钟页数字字体。
 
 接线示意图见 [`docs/接线图.svg`](docs/接线图.svg)（SVG，浏览器可直接打开）。
 
@@ -238,6 +242,31 @@ python install.py --check    :: 想先体检就跑这个，不改任何东西
 4. **COM 口被别的程序占了** —— 串口监视器、Arduino IDE 串口绘图仪、`handle64.exe -a Serial` 都能看出来。
 5. 烧录固件前必须 `python stop_monitor.py`，否则 PlatformIO 抢不到 COM 口。
 
+### 6. 不接电脑也能用（WiFi 独立对时）
+
+设备插充电头独立供电时，会自动进时钟页并联网取标准时间 —— 不再是「NO DATA」砖。
+
+**首次配置**（只需一次；凭据写进设备 NVS，**不随固件、不进仓库**）：
+
+```
+python pc/stop_monitor.py                 # 先让出串口
+（用任意串口工具连 COM7 @115200，逐行发送：）
+WIFI:你的SSID,你的密码                     # 可发两组（主 / 备用路由器）
+NET?                                      # 查看当前状态
+```
+
+写完直接拔线插充电头即可。上电 3 秒后开始尝试连接，**拿到时间立刻关掉 WiFi**。
+
+**注意**
+
+- ESP32-WROOM-32 **只支持 2.4G**，路由器的 5G 名字连不上（双频合一通常没问题）。
+- 凭据存 NVS，**源码里没有任何 WiFi 密码** —— 这是为 `export_opensource.py` 导出时不泄露。
+- 最多记住 2 组，按顺序尝试；换路由器重发 `WIFI:` 即可覆盖；`WIFICLR` 清空全部。
+- 没有网络时可用串口手动对时：`TIME:2026-09-19 13:40:00`（重启即失效，仅作兜底）。
+- 屏上状态词（时钟页卡片下方）：`NO CFG` 未配置 / `LINKING` 连接中 / `SYNCING` 对时中 /
+  `WIFI OK` 已对时 / `NO NET` 连不上 / `NO TIME` 有凭据但还没对上。
+- 串口心跳可直接看到设备自己的时间：`[HB] view=1 rx=.. net=WIFI OK t=13:52:03 heap=..`。
+
 ---
 
 ## 三、屏幕不对，改这几个常量
@@ -285,14 +314,18 @@ python install.py --check    :: 想先体检就跑这个，不改任何东西
 
 ## 四、显示内容
 
-四页，**单个按键 GPIO13** 循环切换。170ms 幕布过渡、1s 刷新、静态不闪烁。
+三页，**单个按键 GPIO13** 循环切换，或 **PC 在线时每 10 秒自动轮播**（切后在本页停留 10 秒，三页循环）。170ms 幕布过渡、1s 刷新、静态不闪烁。
+
+> 自动轮播只在 **PC 在线**时生效。PC 关机 / 断流超过 5 秒后停在时钟页当钟用，不再轮播
+> —— 否则会轮流停在总览 / 天气页显示「未连接」。手动短按切页会把 10 秒计时清零重算。
 
 | 页 | 内容 |
 |---|---|
-| 1 OVERVIEW | 《我的世界》主题：方块图标 + 分段经验条 + 5×7 点阵字 |
-| 2 CLOCK | 翻页时钟：HH MM SS 六张卡片、翻页动画、日期、开机时长 |
-| 3 CALENDAR | 整面月视图：中文月份标题（2026 年 9 月）、今日高亮 |
-| 4 WEATHER | 自动定位城市 + 天气图标 + 大温度 + 描述 + 高低温 / 湿度 / 风速 |
+| 0 OVERVIEW | 四环仪表：CPU / RAM / NET / GPU 四环 + 顶部时钟 + 右侧日期（蓝=正常，≥80% 整环转红） |
+| 1 CLOCK | 彩虹电子时钟：六位糖果色数字 + 日期 + 开机时长；PC 断流 5s 后离线自走时 |
+| 2 WEATHER | 城市 + 彩虹环温（弧长=当日高低温区间位置）+ 环内糖果温度 + 高低温 / 湿度 / 风速 |
+
+> 原「整面月视图」日历页已于 2026-09-19 删除（页面数 4 → 3）。
 
 顶栏：时间 + 日期 + 开机时长 + 页码方块。断流 5 秒后日期区显示 `OFF`。
 
@@ -329,14 +362,14 @@ tools/gen_mc_theme.py    导出 src/mc_theme.h（PROGMEM 位图 + 绘制函数�
 排版验证另有一个只读工具 `tools/st_layout_preview.py`：用与固件相同的常量
 （`EDGE_TOP` / `BODY_TOP` / `ROW_H`）重画一遍状态页，改版式前先看它，4x 放大出图。
 
-### 2 · 中文点阵字库（日历页 / 天气页用）
+### 2 · 中文点阵字库（天气页用）
 
 内置字体无中文，三套互相隔离的 PROGMEM 字模（都是 SimHei 16×16 生成，
 **仓库只含生成出的位图数组，不含字体文件**，见 `THIRD_PARTY.md`）：
 
 | 文件 | 字数 | 生成脚本 | 用途 |
 |---|---|---|---|
-| `src/cn_font.h` | 12 | `tools/gen_cnfont.py` | 日历标题（年 / 月 / 一~十） |
+| `src/cn_font.h` | 12 | `tools/gen_cnfont.py` | **已停用**（原日历标题 年 / 月 / 一~十）；文件保留备用 |
 | `src/weather_cn.h` | 34 | `tools/gen_weather_cn.py` | 天气词（晴 / 阴 / 雨 / 高 / 低 / 湿…） |
 | `src/cn_city.h` | 199 | `tools/gen_city_cn.py` | 城市地名（省会 + 主要地级市 + 汉江/秦巴一带） |
 
@@ -357,19 +390,25 @@ HH MM SS 六张卡片式数字，每位数从 Candy Rainbow 调色板依次取�
 数字不是内置字体，而是 **4-bit alpha 掩码**（0..15 覆盖度），由
 `tools/gen_clock_font.py` 用「超采样 SS=4 渲染 → 形态学膨胀加粗 → LANCZOS 降采样
 → 4bit 量化」烘焙而来——加粗做在超采样大图上，所以加粗后边缘仍然抗锯齿。
-内置 4 套字体，**长按按键 >700ms 现场切换**。改字体或粗细后重跑生成器，
+内置 4 套字体，**长按按键 >600ms 现场切换**。改字体或粗细后重跑生成器，
 它自带触边自检（数字左右必须各留 ≥1px，否则报 `⚠`）。
 
-**离线走时**：PC 关机 / 断流超过 5 秒，设备自动跳到时钟页并用自己的内部时钟继续走时，
-日期和时钟都不停；PC 一上线又被真实时间对齐（在线零漂移）。
-离线精度取决于 ESP32 内部 RC 振荡器，数小时级漂移几秒，看时间够用。
+**离线走时 + 自动对时**：PC 关机 / 断流超过 5 秒，设备自动跳到时钟页当钟用。
+时间来源按优先级三级（配置见「二 · 6 不接电脑也能用」）：
 
-> 前提：主板 USB 在关机后仍要供电（BIOS 里的 USB 待机供电 / ErP 设置）。
-> 如果 BIOS 关了待机供电，PC 一关机设备就断电，离线走时自然无从谈起。
+1. **PC 在线** —— 串口每帧带真实时间，逐帧对齐，零漂移；
+2. **PC 不在线** —— 设备自己连 2.4G WiFi 走 SNTP 取一次标准时间，之后由内部时钟自走，
+   每 6 小时重校一次（**拿到时间立刻关 WiFi**，不干扰 SPI 刷屏、也不费电）；
+3. **取不到时间** —— 继续用内部时钟，屏上给出状态词（`NO NET` / `NO CFG`）。
+
+内部走时取决于 ESP32 的 40MHz 晶振（±10~40ppm），一天偏差数秒内，看时间够用。
+**从来没有时间源**时（刚上电且未联网），时钟页显示六张空卡片 + 横杠占位 + 状态词，
+不会退化成一块「NO DATA」。
 
 ### 4 · 天气页
 
-`pc/monitor.py` 在 PC 侧拉天气，把结果随状态一起推进固件——**ESP32 不联网**。
+`pc/monitor.py` 在 PC 侧拉天气，把结果随状态一起推进固件 —— 天气数据始终由 PC 提供。
+（ESP32 自身只在「没有 PC 时间源」时短暂联网做 NTP 对时，不负责抓天气。）
 
 配置在 `pc/weather_tune.json`（仓库给的是 `weather_tune.example.json`，
 复制改名即可），可写死城市，也可以 `auto_location` 走 IP 定位。
@@ -401,21 +440,26 @@ esp32/
   platformio.ini          工程配置（依赖走 lib_deps 自动下载）
   no_map.py               摘掉 -Wl,-Map，绕开中文路径导致链接失败（见第七节）
   src/
-    main.cpp              固件全部逻辑（四页渲染 / 按键 / 串口协议 / 翻转）
+    main.cpp              固件全部逻辑（三页渲染 / 按键 / 串口协议 / 翻转）
     mc_theme.h            总览页点阵字与方块图标（生成物，勿手改）
     clock_fonts.h         时钟页 4-bit alpha 数字掩码（生成物，勿手改）
-    cn_font.h             中文点阵字模 —— 日历标题
+    cn_font.h             中文点阵字模（已停用，保留备用）
     weather_cn.h          中文点阵字模 —— 天气词
     cn_city.h             中文点阵字模 —— 城市名
+    netclock.h/.cpp       独立对时：WiFi + SNTP，凭据存 NVS（不接电脑也能当钟用）
   tools/                  离线工具（生成器 / 仿真 / 硬件探针）
     gen_mc_theme.py       总览页主题 → mc_theme.h
     gen_clock_font.py     时钟数字掩码 → clock_fonts.h
-    gen_cnfont.py         日历标题字模 → cn_font.h
+    gen_cnfont.py         字模生成器 → cn_font.h（当前未参与编译）
     gen_weather_cn.py     天气词字模 → weather_cn.h
     gen_city_cn.py        城市名字模 → cn_city.h
     mc_ui_preview.py      总览页设计稿（gen_mc_theme.py 的数据源）
     st_layout_preview.py  状态页排版验证（4x 出图）
     probe_diag.py         硬复位 + 注帧 + 读心跳，区分「没收到」与「解析失败」
+    _verify_rotation.py   运行期验证三页 10 秒自动轮播（注帧保活 + 记录 [HB] view 序列）
+    _sim_netclock.py      对时状态机 PC 端仿真（超时/退避/重校窗口，27 条断言）
+    _verify_offline_clock.py  运行期验证「脱离电脑自己取到时间」（停 monitor + 硬复位 + 采样）
+    _diag_flash_fail.py   烧录失败排查（端口占用 / 目录完整性 / flash.exe 完整输出）
     probe_boot.py / probe_frame.py / read_glyph_debug.py
   tools/fonts/            时钟页用的 OFL 字体（Trebuchet MS 不在其中）
 pc/

@@ -27,12 +27,16 @@ _BASE_DIR = _pathos.normpath(_HERE + '/..').replace('\\', '/')
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 import os
+import json
 
 TOOLS = _TOOLS_DIR
 OUT_H = _SRC_DIR + "clock_fonts.h"
 OUT_PNG = TOOLS + "clock_font_preview.png"
 
-FC_GW, FC_H = 20, 42
+FC_GW, FC_H = 18, 58      # 目标字模宽×高（瘦高·整体放大：宽 18 / 高 58；需与 main.cpp FC_W-2 一致）
+REND_W = 20               # 渲染框宽：在较宽框里按自然比例渲染，再横向压缩进 FC_GW
+SX = 0.72                 # 横向压缩因子（<1 = 更瘦；放宽到 0.72 恢复协调瘦高比）
+SY = 1.5                  # 纵向拉伸因子（>1 = 更高）
 SS = 4
 ALPHA_MAX = 15
 COV_CUT = 0.06
@@ -40,12 +44,12 @@ COV_CUT = 0.06
 # 启用的字体集：顺序 = 设备上长按切换的顺序。
 # (显示名, 字体路径, 可变字体实例名, 字号, 加粗半径)
 FONTS = [
-    ("Fredoka",   TOOLS + "fonts/Fredoka_wdth_wght.ttf", "Bold", 30, 2),
-    ("Nunito",    TOOLS + "fonts/Nunito_wght.ttf",       "Bold", 29, 3),
-    ("Poppins",   TOOLS + "fonts/Poppins-Bold.ttf",      None,   28, 2),
+    ("Fredoka",   TOOLS + "fonts/Fredoka_wdth_wght.ttf", "Bold", 41, 2),
+    ("Nunito",    TOOLS + "fonts/Nunito_wght.ttf",       "Bold", 40, 3),
+    ("Poppins",   TOOLS + "fonts/Poppins-Bold.ttf",      None,   38, 2),
     # Trebuchet MS 是 Microsoft 商业字体，无再分发授权，仓库不收录（见 THIRD_PARTY.md）。
     # 本机装了就读，没装就跳过。
-    ("Trebuchet", "C:/Windows/Fonts/trebucbd.ttf",       None,   30, 3),
+    ("Trebuchet", "C:/Windows/Fonts/trebucbd.ttf",       None,   41, 3),
 ]
 
 # 字体文件缺失即跳过 —— 保证在没装 Trebuchet MS 的机器（Linux / macOS / 干净 Windows）上也能生成
@@ -73,15 +77,26 @@ def load_font(path, size, var=None):
     return f
 
 
-def render_alpha(digit, path, size, bold_r, var=None):
-    """返回 4-bit alpha 掩码 [FC_H][FC_GW]，与固件读取布局一致（行优先）。"""
-    W, H = FC_GW * SS, FC_H * SS
+def render_alpha(digit, path, size, bold_r, var=None, sx=SX, sy=SY):
+    """返回 4-bit alpha 掩码 [FC_H][FC_GW]（瘦高：横向压 sx、纵向拉 sy，再居中）。
+    与固件读取布局一致（行优先）。"""
+    # 1) 在较宽的渲染框里按自然比例渲染（保证字体不触边，加粗在超采样大图上做）
+    W, H = REND_W * SS, FC_H * SS
     img = Image.new("L", (W, H), 255)
     f = load_font(path, size * SS, var)
     ImageDraw.Draw(img).text((W / 2, H / 2), digit, font=f, fill=0, anchor="mm")
     if bold_r > 0:
         img = ImageOps.invert(ImageOps.invert(img).filter(ImageFilter.MaxFilter(2 * bold_r + 1)))
-    small = img.resize((FC_GW, FC_H), Image.LANCZOS)
+    # 2) 非等比缩放：横向压瘦、纵向拉长（LANCZOS 高质量，不是最近邻台阶）
+    nW = max(1, round(W * sx)); nH = max(1, round(H * sy))
+    img = img.resize((nW, nH), Image.LANCZOS)
+    # 3) 按墨迹 bbox 重新居中到目标字模画布（宽 REND_W→FC_GW、高 FC_H*sy→FC_H）
+    bb = img.getbbox()
+    crop = img.crop(bb) if bb else img
+    cw, ch = crop.size
+    canvas = Image.new("L", (FC_GW * SS, FC_H * SS), 255)
+    canvas.paste(crop, ((FC_GW * SS - cw) // 2, (FC_H * SS - ch) // 2))
+    small = canvas.resize((FC_GW, FC_H), Image.LANCZOS)
     out = []
     for y in range(FC_H):
         row = []
@@ -107,7 +122,16 @@ def main():
         if not os.path.exists(path):
             problems.append("%s: 字体文件不存在 %s" % (name, path))
             continue
-        masks = [render_alpha(str(d), path, size, bold, var) for d in range(10)]
+        # 先按自然比例（sx=1）求最宽数字墨迹宽，自适应压窄到 FC_GW-2 内
+        # （粗圆体自动压更多，细体保留期望 SX），保证四边不裁。
+        raw = [render_alpha(str(d), path, size, bold, var, sx=1.0, sy=1.0) for d in range(10)]
+        wmax = 0
+        for d in range(10):
+            b = bbox(raw[d])
+            if b:
+                wmax = max(wmax, b[1] - b[0] + 1)
+        sx_font = min(SX, (FC_GW - 2) / wmax) if wmax else SX
+        masks = [render_alpha(str(d), path, size, bold, var, sx=sx_font, sy=SY) for d in range(10)]
         # 自检：墨迹范围与左右余量
         hs, lx, rx, dens = [], 99, 99, []
         for d in range(10):
@@ -168,6 +192,14 @@ def main():
     with open(OUT_H, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print("written:", OUT_H, os.path.getsize(OUT_H), "bytes")
+
+    # 导出 masks 给 preview_clock_page.py（PC 端复刻固件渲染，做视觉验收）
+    js = {"FC_GW": FC_GW, "FC_H": FC_H, "fonts": [s[0] for s in sheets], "masks": []}
+    for (name, path, var, size, bold, masks, ink, lx, rx, ih) in sheets:
+        js["masks"].append(masks)
+    with open(TOOLS + "_clock_masks.json", "w", encoding="utf-8") as fj:
+        json.dump(js, fj)
+    print("masks json ->", TOOLS + "_clock_masks.json")
 
     # 预览：每套字体一行，0-9 顺序
     if sheets:

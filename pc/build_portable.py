@@ -5,13 +5,19 @@
 
 产物
     dist/pc-monitor-portable/
-        monitor.exe     采集端（无窗口）
-        watcher.exe     USB 看门狗（无窗口）
-        安装.bat        注册计划任务并立即启动
-        卸载.bat        删除计划任务
-        暂停采集.bat    建 pause.flag，看门狗让路（烧录固件前用）
-        恢复采集.bat    删 pause.flag
+        monitor.exe     采集端（无窗口，登录自启、常驻、自连自重）
+        flash.exe       烧录器（console 窗口）
+        安装.bat        注册 monitor.exe 的登录自启任务并立即启动
+        卸载.bat        删除计划任务并结束采集
+        暂停采集.bat    停任务+结束采集，把 COM 口让出来（烧录固件前用）
+        恢复采集.bat    恢复任务并重新拉起采集
+        烧录固件.bat    暂停→烧录→恢复
         使用说明.txt
+
+说明（2026-09-19 改）
+    已去掉 watcher 看门狗。monitor 自身就会常驻等待板子、自动连、断线重连、
+    串口号变了重扫；看门狗唯一不可替代的作用「开机把它拉起来」改由任务计划的
+    登录自启（AtLogOn + 崩溃自动重启）承担，少一个常驻进程。
 
 为什么要这套东西
     另一台电脑没装 Python 时，脚本版跑不起来，也装不了依赖。
@@ -21,7 +27,7 @@
     1. 用 --windowed：常驻程序不能有控制台窗口，否则桌面上一直挂着黑框。
        windowed 模式下 sys.stdout 为 None，脚本已内置兜底把输出写进日志文件。
     2. 打包后 __file__ 指向临时解压目录（_MEIPASS），日志会写进去然后随进程
-       退出丢失。所以 monitor.py / watcher.py 里统一用 app_dir() 定位目录。
+       退出丢失。所以 monitor.py / flash.py 里统一用 app_dir() 定位目录。
 
 用法
     python build_portable.py
@@ -42,17 +48,19 @@ OUT_DIR = os.path.join(HERE, "dist", "pc-monitor-portable")
 BUILD_ROOT = os.path.join(os.environ.get("TEMP", r"C:\Windows\Temp"), "pcmonitor_build")
 
 # (脚本, 产物名, 窗口模式, 额外参数)
-#   常驻的 monitor/watcher 必须 windowed，否则桌面一直挂黑框；
+#   常驻的 monitor 必须 windowed，否则桌面一直挂黑框；
 #   flash 反过来要 console——烧录时得让用户在窗口里看到进度和报错。
 TARGETS = (
     ("monitor.py", "monitor", "windowed", []),
-    ("watcher.py", "watcher", "windowed", []),
     ("flash.py", "flash", "console",
      # esptool 用 importlib 动态加载各芯片 target，静态分析扫不到，必须整个收进来
      ["--collect-submodules", "esptool", "--collect-data", "esptool"]),
 )
 
-TASK_NAME = "PCMonitorWatch"
+# 任务名。旧版是 PCMonitorWatch（看门狗），新版只跑 monitor.exe。
+# 安装/卸载脚本的清理列表同时覆盖两个名字，方便从旧版平滑迁移。
+TASK_NAME = "PCMonitor"
+LEGACY_TASK_NAME = "PCMonitorWatch"
 
 
 def say(msg=""):
@@ -118,7 +126,7 @@ def stop_running():
 
 
 def restart_task():
-    """打包杀掉了实例，装完顺手把看门狗拉回来。起不来也不拦，提示手动恢复。"""
+    """打包杀掉了实例，装完顺手把采集任务拉回来。起不来也不拦，提示手动恢复。"""
     try:
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
@@ -128,11 +136,11 @@ def restart_task():
         out = (r.stdout or "").strip()
         state = out.splitlines()[-1] if out else ""
         if state:
-            say("  看门狗已重新拉起：%s" % state)
+            say("  采集任务已重新拉起：%s" % state)
             return
     except Exception:
         pass
-    say("  看门狗没能自动拉起，双击「安装.bat」恢复")
+    say("  采集任务没能自动拉起，双击「安装.bat」恢复")
 
 
 def copy_firmware():
@@ -178,9 +186,9 @@ def make_bat(name, body):
 
 PS_INSTALL = (
     "$ErrorActionPreference='Stop';"
-    "foreach($n in @('PCMonitor','{TASK}')){{"
+    "foreach($n in @('{LEGACY}','{TASK}')){"
     "Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue;"
-    "Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue}};"
+    "Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue};"
     "$a=New-ScheduledTaskAction -Execute '{EXE}';"
     "$t=New-ScheduledTaskTrigger -AtLogOn;"
     "$s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries"
@@ -190,43 +198,43 @@ PS_INSTALL = (
     "Start-ScheduledTask -TaskName '{TASK}';"
     "Start-Sleep -Seconds 4;"
     "(Get-ScheduledTask -TaskName '{TASK}').State"
-).replace("{TASK}", TASK_NAME)
+).replace("{TASK}", TASK_NAME).replace("{LEGACY}", LEGACY_TASK_NAME)
 
 
 def write_bats():
     """bat 里全是 % 开头的变量（%~dp0 / %TASKSTATE%），用 % 格式化会把它们
     当格式符直接报错，所以统一用占位符 replace。"""
-    ps_install = PS_INSTALL.replace("{EXE}", os.path.join(OUT_DIR, "watcher.exe"))
+    ps_install = PS_INSTALL.replace("{EXE}", "%~dp0monitor.exe")
 
     install_body = (
         'cd /d "%~dp0"\n'
         "echo.\n"
-        "echo   PC 状态监控 · 安装\n"
+        "echo   PC 状态监控 · 安装（免看门狗版）\n"
         "echo   ------------------------------\n"
-        'if not exist "watcher.exe" (\n'
-        "  echo   [错误] 当前目录找不到 watcher.exe\n"
+        'if not exist "monitor.exe" (\n'
+        "  echo   [错误] 当前目录找不到 monitor.exe\n"
         "  pause & exit /b 1\n"
         ")\n"
-        "echo   [1/2] 注册计划任务（登录后自动运行，无窗口）\n"
+        "echo   [1/2] 注册计划任务（登录后自动运行 monitor.exe，无窗口）\n"
         "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
         '"{PS}" > _taskstate.txt 2>&1\n'
         "set /p TASKSTATE=<_taskstate.txt\n"
         'if not "%TASKSTATE%"=="Running" (\n'
         "  echo   PowerShell 方式没成功，改用 schtasks 重试...\n"
-        '  schtasks /create /tn "{TASK}" /tr "\'%~dp0watcher.exe\'" /sc onlogon /f >nul 2>&1\n'
+        '  schtasks /create /tn "{TASK}" /tr "\'%~dp0monitor.exe\'" /sc onlogon /f >nul 2>&1\n'
         '  schtasks /run /tn "{TASK}" >nul 2>&1\n'
         ")\n"
-        "echo   [2/2] 检查看门狗\n"
+        "echo   [2/2] 检查采集端\n"
         "timeout /t 6 /nobreak >nul\n"
-        'if exist "watcher.log" (\n'
-        "  echo   看门狗日志最后几行：\n"
-        "  powershell -NoProfile -Command \"Get-Content 'watcher.log' -Tail 4\"\n"
+        'if exist "monitor.log" (\n'
+        "  echo   采集端日志最后几行：\n"
+        "  powershell -NoProfile -Command \"Get-Content 'monitor.log' -Tail 4\"\n"
         ") else (\n"
-        "  echo   [警告] 没有生成 watcher.log，看门狗可能没起来\n"
+        "  echo   [警告] 没有生成 monitor.log，采集端可能没起来\n"
         ")\n"
         "echo.\n"
         "echo   完成。现在插上开发板，几秒内屏幕应该离开 PC MONITOR。\n"
-        "echo   不亮就看 watcher.log / monitor.log\n"
+        "echo   不亮就看 monitor.log\n"
         "echo.\n"
         "pause\n"
     ).replace("{PS}", ps_install).replace("{TASK}", TASK_NAME)
@@ -235,33 +243,43 @@ def write_bats():
         'cd /d "%~dp0"\n'
         "echo   卸载计划任务并停止采集...\n"
         "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
-        '"foreach($n in @(\'{TASK}\',\'PCMonitor\')){Stop-ScheduledTask -TaskName $n '
+        '"foreach($n in @(\'{TASK}\',\'{LEGACY}\')){Stop-ScheduledTask -TaskName $n '
         "-ErrorAction SilentlyContinue;Unregister-ScheduledTask -TaskName $n "
         "-Confirm:$false -ErrorAction SilentlyContinue};'ok'\" >nul 2>&1\n"
         'schtasks /delete /tn "{TASK}" /f >nul 2>&1\n'
+        'schtasks /delete /tn "{LEGACY}" /f >nul 2>&1\n'
         "taskkill /f /im monitor.exe >nul 2>&1\n"
         "taskkill /f /im watcher.exe >nul 2>&1\n"
         "echo   已卸载。\n"
         "pause\n"
-    ).replace("{TASK}", TASK_NAME)
+    ).replace("{TASK}", TASK_NAME).replace("{LEGACY}", LEGACY_TASK_NAME)
 
     pause_body = (
         'cd /d "%~dp0"\n'
-        "echo burn> pause.flag\n"
+        "echo   暂停采集：停任务 + 结束采集端，把 COM 口让出来...\n"
+        'schtasks /change /tn "{TASK}" /disable >nul 2>&1\n'
+        'schtasks /end /tn "{TASK}" >nul 2>&1\n'
         "taskkill /f /im monitor.exe >nul 2>&1\n"
-        "echo   已暂停：看门狗不会再拉起采集，COM 口已释放。\n"
+        "echo   已暂停：采集端已停、COM 口已释放，登录自启任务也已禁用。\n"
         "echo   烧完固件记得双击「恢复采集.bat」\n"
         "pause\n"
-    )
+    ).replace("{TASK}", TASK_NAME)
 
     resume_body = (
         'cd /d "%~dp0"\n'
-        "if exist pause.flag del pause.flag\n"
-        "echo   已恢复：几秒内看门狗会重新拉起采集。\n"
+        "echo   恢复采集...\n"
+        'schtasks /query /tn "{TASK}" >nul 2>&1\n'
+        "if errorlevel 1 (\n"
+        "  echo   计划任务不存在，直接启动采集端...\n"
+        '  start "" "%~dp0monitor.exe"\n'
+        ") else (\n"
+        '  schtasks /change /tn "{TASK}" /enable >nul 2>&1\n'
+        '  schtasks /run /tn "{TASK}" >nul 2>&1\n'
+        ")\n"
         "timeout /t 4 /nobreak >nul\n"
-        "if exist watcher.log powershell -NoProfile -Command \"Get-Content 'watcher.log' -Tail 3\"\n"
+        "if exist monitor.log powershell -NoProfile -Command \"Get-Content 'monitor.log' -Tail 3\"\n"
         "pause\n"
-    )
+    ).replace("{TASK}", TASK_NAME)
 
     flash_body = (
         'cd /d "%~dp0"\n'
@@ -277,7 +295,8 @@ def write_bats():
         "  pause & exit /b 1\n"
         ")\n"
         "echo   [1/3] 暂停采集，把 COM 口让出来\n"
-        "echo burn> pause.flag\n"
+        'schtasks /change /tn "{TASK}" /disable >nul 2>&1\n'
+        'schtasks /end /tn "{TASK}" >nul 2>&1\n'
         "taskkill /f /im monitor.exe >nul 2>&1\n"
         "timeout /t 2 /nobreak >nul\n"
         "echo   [2/3] 烧录（请确认开发板已接好 USB）\n"
@@ -286,7 +305,8 @@ def write_bats():
         "set RC=%ERRORLEVEL%\n"
         "echo.\n"
         "echo   [3/3] 恢复采集\n"
-        "if exist pause.flag del pause.flag\n"
+        'schtasks /change /tn "{TASK}" /enable >nul 2>&1\n'
+        'schtasks /run /tn "{TASK}" >nul 2>&1\n'
         'if "%RC%"=="0" (\n'
         "  echo   烧录完成。板子已重启，几秒内屏幕离开 PC MONITOR。\n"
         ") else (\n"
@@ -295,7 +315,7 @@ def write_bats():
         ")\n"
         "echo.\n"
         "pause\n"
-    )
+    ).replace("{TASK}", TASK_NAME)
 
     make_bat("安装.bat", install_body)
     make_bat("卸载.bat", uninstall_body)
@@ -305,19 +325,34 @@ def write_bats():
 
 
 def write_readme():
-    txt = """PC 状态监控 · 免 Python 便携版
+    txt = """PC 状态监控 · 免 Python 便携版（免看门狗版）
 =====================================
 
 用法
-  1. 把整个文件夹拷到目标电脑任意位置（别放需要管理员权限的目录）
-  2. 双击「安装.bat」
+  1. 把整个文件夹拷到目标电脑任意位置（别放需要管理员权限的目录，
+     也别放 U 盘/网络盘里直接运行）
+  2. 双击「安装.bat」——注册登录自启任务并立刻启动采集端
   3. 插上开发板，几秒内屏幕离开 PC MONITOR
+
+装一次就够。之后每次开机，采集端会自动运行；插上板子它自己连、
+自己推数据、拔了静默等、再插再连，不需要再管。
+包里没有看门狗进程，也没有常驻轮询——采集端本身就是自连自重的。
+
+运行环境要求（拿到别的电脑前先看这段）
+  · 系统：Windows 8.1 / 10 / 11。Windows 7 跑不起来（内核依赖不支持）。
+  · 位数：必须是 64 位 Windows。本包是 64 位程序，32 位系统跑不了。
+  · USB 串口驱动：目标电脑必须能识别开发板上的 CH340 串口芯片。
+    多数 Win10/11 会自动装；没装的话设备管理器里会出现「未知设备」，
+    屏幕会一直停在 PC MONITOR。装一下 WCH 官方 CH341SER 驱动即可。
+  · 杀毒软件：包里的 exe 由 PyInstaller 打包，常被杀软/Defender 误报，
+    首次运行可能被拦或弹 SmartScreen 警告。加白名单 / 选「仍要运行」。
+  · 网络：天气功能需要联网（自动按 IP 定位）。没网也能用，天气显示 NO DATA。
 
 需要重烧固件时（固件已随包附带，不用装 PlatformIO、不用装 Python）
   双击「烧录固件.bat」
   它会自动：暂停采集让出 COM 口 → 烧录 → 恢复采集
-  手动分步的话：暂停采集.bat → 烧 → 恢复采集.bat。不暂停的话采集端
-  占着 COM 口，烧录必然失败；只杀进程也没用，看门狗 3 秒内就拉回来了。
+  手动分步：暂停采集.bat → 烧 → 恢复采集.bat。不暂停的话采集端占着
+  COM 口，烧录必然失败。
 
 不再用了
   双击「卸载.bat」
@@ -325,45 +360,43 @@ def write_readme():
 -------------------------------------
 文件说明
   monitor.exe    采集端：每 1 秒采集 CPU/内存/网络/GPU/磁盘，经 USB 推给小屏
-  watcher.exe    看门狗：每 3 秒扫串口，见到 CH340 就把采集端拉起来
-                 拔了再插、开机时已插着、采集端崩了，三种情况都会自愈
-  watcher.log    看门狗日志：硬件在不在、有没有拉起、是不是被暂停了
+                 登录自启、常驻运行、自动扫 CH340、断线自愈
   monitor.log    采集端日志：串口连上没、推了什么数据、崩了没
   flash.exe      烧录器：内含 esptool，自动扫串口，460800 波特率
   firmware\\      固件四个文件：bootloader / partitions / boot_app0 / firmware
 
 屏停在 PC MONITOR 怎么查
-  1. 先翻 watcher.log：
-     - 没有内容             → 看门狗没跑，重双击「安装.bat」
-     - CH340=未连接         → 线没插好或驱动没装
-     - 暂停=是              → pause.flag 忘了删，双击「恢复采集.bat」
-     - CH340=COMx 采集=运行中 → 看门狗没问题，去翻 monitor.log
-  2. monitor.log 里没有 [串口] 已连接 → COM 口被别的程序占了
+  1. 先看设备管理器有没有「未知设备 / USB-SERIAL CH340」——有黄色感叹号
+     就是驱动没装，装 CH341SER 驱动。
+  2. 再翻 monitor.log：
+     - 没有 [串口] 已连接 → CH340 没被识别（驱动/线/接触问题），或被别的程序占了
+     - 有 [串口] 已连接但屏幕不亮 → 固件问题，重烧固件
+  3. 日志整个没有 → 任务没跑起来，重双击「安装.bat」
 
 -------------------------------------
 常见问题
-  Q: 杀毒软件报毒？
-     PyInstaller 打包的程序常被误报。加白名单即可，代码就是本目录下的脚本。
+  Q: 杀毒软件报毒 / SmartScreen 拦截？
+     PyInstaller 打包的程序常被误报，代码就是本目录的脚本。加白名单即可。
+
+  Q: 任务计划没注册成功？
+     安装.bat 会先试 PowerShell，失败自动退回 schtasks。都失败的话手动执行：
+     schtasks /create /tn PCMonitor /tr "'完整路径\\monitor.exe'" /sc onlogon /f
 
   Q: 想改采集频率 / 串口号？
      便携版改不了，需要用 Python 版（monitor.py），那台电脑得装 Python。
 
   Q: 烧录失败怎么办？
      先确认采集已暂停（暂停采集.bat），串口被占是最常见原因。
-     还不行就把波特率调低：在 flash.py 里把 BAUD 改成 115200 后重新打包。
      线的问题也很多——有些 USB 线只能充电不能传数据。
+     换 USB 2.0 口试试，个别 USB3.0 口/前置口对 CH340 不稳。
 
   Q: 想换回自己编译的固件？
      把新编译的 firmware.bin 覆盖 firmware\\firmware.bin 即可，
      其余三个文件（bootloader/partitions/boot_app0）一般不用动。
 
-  Q: 任务计划没注册成功？
-     安装.bat 会先试 PowerShell，失败自动退回 schtasks。两条都失败的话，
-     手动执行：schtasks /create /tn PCMonitorWatch /tr "'完整路径\\watcher.exe'" /sc onlogon /f
-
-  Q: 任务管理器里 watcher.exe / monitor.exe 各有两个？
+  Q: 任务管理器里 monitor.exe 有两个？
      正常，不是双开。单文件 exe 是「bootloader 父进程 + 真子进程」结构，
-     杀的时候两个会一起没。只要日志里没有「已有实例在跑」，就没有重复启动。
+     杀的时候两个会一起没。只要日志里没有「已有实例在运行」，就没有重复启动。
 """
     with open(os.path.join(OUT_DIR, "使用说明.txt"), "w", encoding="utf-8") as f:
         f.write(txt)

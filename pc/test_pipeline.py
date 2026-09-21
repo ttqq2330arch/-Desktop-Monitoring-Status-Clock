@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """主机侧跑通测试：PC 采集 -> 固件解析 -> 三页内容生成。
-不依赖真机，验证数据协议、日历算法、页面逻辑都能跑通不报错。
+不依赖真机，验证数据协议、日期算法、页面逻辑都能跑通不报错。
 """
 import os, sys, json, traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,25 +105,14 @@ if st['year']:
     print(f"  星期: {WK[dayOfWeek(st['year'], st['month'], st['day'])]}")
 print(f"  秒弧: {st['sec']}/60")
 
-# 第3页 整面日历
-print("\n--- 第3页 整面日历 (CALENDAR) ---")
-MON=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
-print(f"  标题: {MON[st['month']-1]} {st['year']}")
-print("  表头: " + " ".join(f"{w[0]}" for w in WK))  # M T W T F S S
-fd = (dayOfWeek(st['year'], st['month'], 1) + 6) % 7  # 周一为首列
-total = daysInMonth(st['year'], st['month'])
-grid = ["  "] * fd + [f"{d:2}" for d in range(1, total+1)]
-for r in range(0, max(42, len(grid)), 7):
-    line = grid[r:r+7]
-    print("  " + " ".join(f"{c:>2}" for c in line))
-print(f"  今天高亮: {st['day']} (强调色实心圆)")
+# 日历页已于 2026-09-19 删除（页面数 4 -> 3：总览 / 大时钟 / 天气）
 
 # ---------- 5) 健全性检查 --------------------------------------------------
 print("\n=== STEP 4: 健全性检查 ===")
 errs=[]
 if st['cpu']<-1 or st['cpu']>100: errs.append("cpu 超范围")
 if st['mem']<-1 or st['mem']>100: errs.append("mem 超范围")
-if st['year']==0: errs.append("year 缺失 -> 日历无法显示")
+if st['year']==0: errs.append("year 缺失 -> 时钟页日期无法显示")
 if not (0<=st['sec']<=59): errs.append("sec 超范围")
 # 星期交叉验证：用 Python 标准库
 import datetime

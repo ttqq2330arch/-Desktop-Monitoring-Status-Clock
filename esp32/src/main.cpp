@@ -11,7 +11,7 @@
      MISO 不接
 
    轻触开关（2脚/4脚通用：一端接 GPIO，另一端接 GND；INPUT_PULLUP，按下读 LOW）
-     BTN  -> 13   （唯一按键：每按一下切下一页，总览→时钟→日历循环，带幕布过渡）
+     BTN  -> 13   （唯一按键：每按一下切下一页，总览→时钟→天气循环，带幕布过渡）
 
    屏幕不对先改下面「屏幕微调」那五个常量，别动别的地方
    ============================================================================ */
@@ -21,7 +21,9 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include <string.h>    // memset（时钟页 alpha 掩码清零）
-#include "cn_font.h"   // 16x16 中文点阵字模（年月一~十，黑体生成）
+#include "netclock.h"  // 独立对时：无 PC 时用 WiFi + SNTP 取时间（凭据存 NVS，不写源码）
+// 注：cn_font.h（年月一~十字模）随日历页一并停用 —— 文件仍在 src/ 下，
+//     将来若要再画中文数字，重新 include 并复用其 CN_GLYPHS 即可。
 
 // ============================== 屏幕微调 ====================================
 #define PIN_SCK   18
@@ -35,7 +37,7 @@
 // 轻触开关：另一端接 GND，启用内部上拉，按下读 LOW
 // 注意：避开 ESP32 strapping pin（0/2/5/12/15）、flash 占用（6-11）、
 //      已用 SPI/背光/控制脚（4=BLK / 5=CS / 16=RST / 17=DC / 18=SCK / 23=MOSI）。
-// 单按键循环切页：每按一下切到下一页（总览→时钟→日历→总览…），去抖 25ms。
+// 单按键循环切页：每按一下切到下一页（总览→时钟→天气→总览…），去抖 25ms。
 // 历史包袱：OK 曾用 15（strapping）不行，改 4 又撞 BLK，最终单键定在 GPIO13。
 #define PIN_BTN       13            // 唯一按键，按下=切下一页
 
@@ -44,7 +46,7 @@
 // 即 128 行落在 GRAM 行 [2,129]。这组值从项目第一天跑到现在，画面从未错位，别动。
 #define OFFSET_X    0     // 有白边/画面偏移：调这个
 #define OFFSET_Y    0     // 和这个
-#define RGB_ORDER   false // 红蓝反了：改 true
+#define RGB_ORDER   true  // ★实测本屏必须 true：false 会走 MAD_BGR → 屏上「蓝」显示成「橙」
 #define INVERT_COL  false // 整屏发黑或发白：改 true
 #define SPI_FREQ    20000000  // 花屏就降到 10000000
 
@@ -97,23 +99,37 @@ static const uint16_t C_TXT   = RGB(0xEE, 0xEE, 0xF2);  // 主文字（近白）
 static const uint16_t C_DIM   = RGB(0x73, 0x73, 0x82);  // 次要 / 注释（灰）
 static const uint16_t C_ACC   = RGB(0x4D, 0xD0, 0xC4);  // 唯一强调色（清新青绿）
 static const uint16_t C_WARN  = RGB(0xEF, 0x9F, 0x27);  // 负载偏高（≥60%）
-static const uint16_t C_HOT   = RGB(0xE5, 0x4A, 0x4A);  // 高负载（≥85%）转红
 static const uint16_t C_SEL   = C_ACC;                  // 选中高亮 = 强调色
 
-// 总览页各指标基色（克制、低饱和；仅在高负载时整体转 WARN/HOT）
-static const uint16_t MC_CPU  = RGB(0x4D, 0xD0, 0xC4);  // 青绿
-static const uint16_t MC_RAM  = RGB(0xE0, 0xA0, 0x60);  // 暖橙
-static const uint16_t MC_NET  = RGB(0x5A, 0xA0, 0xF0);  // 蓝
-static const uint16_t MC_GPU  = RGB(0xB0, 0x80, 0xE0);  // 紫
-static const uint16_t MC_DSK  = RGB(0x6C, 0xD0, 0x80);  // 绿
+// ============================== 天气页「霓虹环温」配色（E 版）================
+// 与第1页(J 四环) / 第2页(C 时钟) 同族：无框近黑底 + 环仪表 + 糖果彩虹数字 + 单强调青绿。
+// 设计稿 = tools/weather_jc_combo_5x.py 的 ver_e()（weather_jc_combo_5x.png 第 5 格）。
+// ★ 浅底「柔雾玻璃」方案已废弃：四页里只有它是浅底，与另外三页观感割裂 —— 这是
+//   结构性不匹配，靠微调色值救不回来，所以整页重做为深底。
+static const uint16_t W_TOP   = C_BG;                    // 旧渐变上（已废弃，占位留名）
+static const uint16_t W_BOT   = C_BG;                    // 旧渐变下（已废弃，占位留名）
+static const uint16_t W_CARD  = C_BG;                    // 旧白卡已废：现仅作图标挖空底色（=页面底）
+static const uint16_t W_INK   = RGB(0xE8, 0xED, 0xF2);   // 主文字 / 数字（近白，同 J_INK）
+static const uint16_t W_SUB   = RGB(0x8A, 0x95, 0xA1);   // 次级标签（灰，同 J_LABEL）
+static const uint16_t W_LINE  = RGB(0x2A, 0x2A, 0x34);   // 发丝分隔线
+static const uint16_t W_TRACK = RGB(0x23, 0x2A, 0x32);   // 环轨道（未填充段，同 J_TRACK）
+static const uint16_t W_COL_SUN   = RGB(0xFF, 0xC6, 0x5E);  // 太阳暖黄
+static const uint16_t W_GLOW  = RGB(0xFF, 0xE0, 0x9A);   // 太阳外层光晕
+static const uint16_t W_COL_CLOUD = RGB(0x9A, 0xA8, 0xC8);  // 云：灰蓝（深底上仍清晰）
+static const uint16_t W_COL_RAIN  = RGB(0x78, 0xAA, 0xDC);  // 雨/雪：柔蓝
+static const uint16_t W_BOlt  = RGB(0xF0, 0xAA, 0x5A);   // 雷电：柔橙
 
-// 负载阈值着色：>=85% 红，>=60% 橙，否则用指标基色
-static uint16_t loadColor(int pct, uint16_t base) {
-  if (pct < 0)   return base;
-  if (pct >= 85) return C_HOT;
-  if (pct >= 60) return C_WARN;
-  return base;
+// RGB565 线性插值（渐变逐行用）
+static inline uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t) {
+  int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
+  int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
+  int r = ar + ((br - ar) * t) / 255;
+  int g = ag + ((bg - ag) * t) / 255;
+  int b2 = ab + ((bb - ab) * t) / 255;
+  return (uint16_t)((r << 11) | (g << 5) | b2);
 }
+// 注：总览页已改版为「四环」仪表（见文件后部「第1页」段），其配色与阈值
+//     定义在该段内（J_*）。原先的 MC_* 指标基色与 loadColor() 已无引用，删去。
 
 // ============================== LGFX 设备 ===================================
 // 自检轮播用的候选几何配置表：[memW, memH, panelW, panelH, offX, offY, rotation]
@@ -217,7 +233,7 @@ struct Stats {
   char  time[8]   = "--:--";
   char  date[8]   = "";
   char  uptime[10]= "";
-  int   year  = 0;   // 日历页用：PC 下发的完整日期
+  int   year  = 0;   // 时钟页离线走时用：PC 下发的完整日期
   int   month = 0;
   int   day   = 0;
   int   sec   = 0;   // 秒（驱动时钟页秒针环 / 冒号闪烁）
@@ -242,20 +258,23 @@ static volatile bool newData = false;   // 收到一帧完整有效数据就置�
 // ---- 前向声明：这些函数定义在文件后部，提前声明供渲染/解析调用 ----
 static void render();
 void drawSelfTestPattern();
-static int dayOfWeek(int y, int m, int d);
 static int daysInMonth(int y, int m);
 // 收包/错包计数（串口解析共用，定义在此以便前置使用）
 static uint32_t rxOk = 0, rxBad = 0;
 
-// ---- 离线时钟：PC 关机后由 ESP32 自己走时，不再依赖电脑 ----
-// 在线时每帧用 PC 带来的真实时间对齐（零漂移）；离线时按 millis() 流逝推进。
-// 前提：ESP32 的 USB 在电脑关机后仍由主板待机供电（USB 待机供电默认多开启）。
+// ---- 内部时钟：PC 关机后由 ESP32 自己走时，不再依赖电脑 ----
+// 时间有两个来源，优先级 PC > NTP：
+//   1) PC 在线：串口每帧带真实时间 → syncClockFromPC() 逐帧对齐（零漂移）
+//   2) PC 不在线：netclock 模块用 WiFi + SNTP 取一次标准时间（见 netclock.h），
+//      之后由 tickClock() 按 millis() 流逝自走，每 6 小时重校一次
+// 因此设备脱离电脑后（哪怕重新上电、甚至从没接过电脑）也能显示正确时间。
 static int      gClkY = 0, gClkM = 0, gClkD = 0;   // 年/月/日
 static int      gClkH = 0, gClkMi = 0, gClkS = 0;  // 时/分/秒
 static uint32_t gClkMs = 0;                        // 上次从 PC 同步时间时的 millis()
 static bool     gClkSynced = false;                // 是否已拿到过一次有效时间
 static const uint32_t OFFLINE_MS = 5000;           // 超过这么久没收帧 = PC 已离线
-static bool     gWasOnline = true;                 // 上一帧在/离线状态（用于边沿触发跳页）
+static bool     gOfflineHold = false;              // 已进入「离线值守」（停在时钟页当钟用），PC 回来才解除
+static bool     gFirstOnlineDone = false;           // 上电后首次确认「插着电脑在线」→ 从开机默认的时钟页升级到总览页
 
 // ============================== 12x12 矢量图标 ==============================
 enum { IC_CLOCK, IC_CHIP, IC_RAM, IC_NET, IC_GPU, IC_DISK };
@@ -335,36 +354,7 @@ static void txtCenter(const char* s, int cx, int centerY, int fontH, uint16_t co
   sprite.print(s);
 }
 
-// 绘制 16x16 中文点阵字模（左上角坐标 x,y）
-static void drawCn(int idx, int x, int y, uint16_t color) {
-  for (int row = 0; row < CN_GLYPH_H; row++) {
-    uint16_t bits = (uint16_t)pgm_read_byte(&CN_GLYPHS[idx][row * 2]) << 8
-                  | pgm_read_byte(&CN_GLYPHS[idx][row * 2 + 1]);
-    for (int col = 0; col < CN_GLYPH_W; col++)
-      if (bits & (0x8000 >> col)) sprite.writeFastHLine(x + col, y + row, 1, color);
-  }
-}
-
-// 居中绘制 "2026 年 9 月" 风格的中文月份标题
-static void drawMonthTitle(int year, int month, int centerY, uint16_t color) {
-  char ybuf[8], mbuf[4];
-  snprintf(ybuf, sizeof(ybuf), "%d", year);
-  snprintf(mbuf, sizeof(mbuf), "%d", month);
-  pickFont(14);
-  int wy = sprite.textWidth(ybuf);
-  int wm = sprite.textWidth(mbuf);
-  int gap = 3;
-  int x = (SCR_W - (wy + gap + 16 + gap + wm + gap + 16)) / 2;
-  sprite.setTextColor(color, C_BG);
-  sprite.setCursor(x, centerY - 7);
-  sprite.print(ybuf);
-  drawCn(CN_NIAN, x + wy + gap, centerY - 8, color);
-  int x2 = x + wy + gap + 16 + gap;
-  sprite.setCursor(x2, centerY - 7);
-  sprite.print(mbuf);
-  drawCn(CN_YUE, x2 + wm + gap, centerY - 8, color);
-}
-// 大号文本（Font2 × size 放大），用于调节页的重点数字
+// 大号文本（Font2 × size 放大），用于重点数字
 static void txtBig(const char* s, int cx, int cy, int size, uint16_t color) {
   sprite.setFont(&lgfx::fonts::Font2);
   sprite.setTextSize(size);
@@ -486,11 +476,11 @@ static void btnPoll() {
 // ============================== 页面 / 状态 ================================
 // 三个页面用三个开关直接选；只有 ST_MON 一个状态，无菜单/无设置/无自检。
 enum UiState  { ST_MON };
-enum ViewPage { VIEW_OVERVIEW, VIEW_CLOCK, VIEW_CALENDAR, VIEW_WEATHER };   // 1总览 2大时钟 3整面日历 4天气
-static const int N_PAGES = 4;
+enum ViewPage { VIEW_OVERVIEW, VIEW_CLOCK, VIEW_WEATHER };   // 0总览 1大时钟 2天气（日历页已删除）
+static const int N_PAGES = 3;
 
 static UiState  uiState = ST_MON;
-static ViewPage curView = VIEW_OVERVIEW;
+static ViewPage curView = VIEW_CLOCK;              // 开机默认进时钟页：只插电源不开机即直接是钟，0 闪屏
 
 // 硬编码（不要设置菜单）：亮度 ~78% / 刷新 1s / °C
 static const uint8_t  gBright    = 200;
@@ -503,18 +493,24 @@ static uint32_t transStart  = 0;
 static bool     gBlink      = false;      // 时钟冒号闪烁状态
 static uint32_t lastClockDraw = 0;
 
+// 自动轮播：在线时每 AUTO_PAGE_MS 自动切下一页，切完在本页停留同样时长，三页循环。
+static const uint32_t AUTO_PAGE_MS = 10000;
+static uint32_t pageDwellT = 0;        // 当前页的起算时刻（手动/自动切页都会重置）
+
 // 翻页：直接跳到指定页 + 启动幕布过渡（170ms 推屏动效）
 static void goPage(ViewPage p) {
   if (transActive) return;            // 过渡中忽略重复翻页
   if (p == curView) return;           // 同页不重绘
   curView = p;
+  pageDwellT  = millis();             // 重新起算本页停留时长
   transActive = true;
   transStart  = millis();
   gPush = false;                      // 过渡期间先不推送，由幕布逻辑控制
 }
 
-// 温度换算（硬编码 °C，屏幕字体无 °，显示成 "62C"）
-static int dispTemp(int c) { return c; }
+// 注：温度副值（CPU/GPU 的 "62C"）在四环版总览页里不再显示 —— 环内空间只够
+//     放「标签 + 主值」两行（内接正方形 24px）。温度字段 st.cpuT / st.gpuT 仍在
+//     正常解析，需要时直接取用即可（原 dispTemp() 为恒等函数，已随之删除）。
 
 // ============================== 通用屏 ======================================
 // bg 可传入所在页的底色（字符背景块要跟页面底色一致，否则会出现色块）
@@ -569,10 +565,10 @@ static void drawHeader(bool stale) {
 //   ① 6 张卡片各一块马卡龙色（HH/MM/SS 每数字一色），上亮下暗 + 中缝 + 糖衣高光
 //   ② 数字用 Trebuchet MS Bold 圆润掩模，翻页时按卡片索引替换哨兵色，零额外显存
 //   ③ 全屏唯一动效就是翻页：旧上半向中缝收拢 → 新下半由中缝向下展开
-#define FC_W       22                 // 卡片宽
-#define FC_H       42                 // 卡片高
-#define FC_HALF    20                 // 上半卡高（对齐设计稿：上 20 行 + 下 22 行）
-#define FC_HB      22                 // 下半卡高（= FC_H - FC_HALF），中缝画在 FC_Y+FC_HALF
+#define FC_W       20                 // 卡片宽（放大版：字模 18 宽 + 左右各 1px）
+#define FC_H       58                 // 卡片高（放大版：更占竖向空间）
+#define FC_HALF    29                 // 上半卡高（= FC_H/2，中缝居中）
+#define FC_HB      29                 // 下半卡高（= FC_H - FC_HALF），中缝画在 FC_Y+FC_HALF
 #define FC_GW       (FC_W - 2)        // 数字位图宽（左右各内缩 1px，保住圆角描边）
 #define FC_GB       ((FC_GW + 1) / 2) // 每行占字节数（4-bit alpha：高 nibble = 左像素）
 #define FC_DIG_DY_DEF (0)             // 数字偏移默认值（PC 端未下发时用；正=上移，负=下移）
@@ -609,7 +605,7 @@ static const uint16_t C_COLON_W     = RGB(0x8E, 0x8E, 0x93);   // 冒号点（iO
 static bool gSprSwap = true;            // true = 裸写缓冲前需 swap16
 
 // 卡片 x 坐标：HH [2] MM [7] SS，组间距 7（放冒号点），组内间距 2
-static const int FC_X[6] = { 4, 28, 57, 81, 110, 134 };
+static const int FC_X[6] = { 9, 31, 59, 81, 109, 131 };   // 适配 FC_W=20：组内 2 / 组间 8 / 左右各 9，居中
 
 // 10 个数字的上下半 **4-bit alpha 掩码**（0=背景，15=墨迹；每行 FC_GB 字节，高 nibble 在前）。
 // 与屏缓冲字节序无关；翻页叶片贴图时按 alpha 与卡面底色混合 → 抗锯齿边缘。
@@ -652,9 +648,9 @@ static inline void nibSet(uint8_t* row, int x, uint8_t a) {
 // 切半存入 gTop/gBot。长按按键切换字体时重新调用本函数即可（掩码源换一套）。
 // 流程（不依赖任何字体度量）：
 //   1) 扫描 alpha>0 的行 → 墨迹范围 [minY,maxY]；
-//   2) 拉伸目标高度 stH = inkH * gStretch / 100（限 ≤38 防顶边）；
+//   2) 拉伸目标高度 stH = inkH * gStretch / 100（限 ≤ FC_H-2 防顶边）；
 //   3) 逐行最近邻重采样 alpha，墨迹中心 cy 按 stH 动态限幅（超了贴边不裁切）；
-//   4) 切片：gTop = 卡片行 [0..20)，gBot = 卡片行 [20..42)。
+//   4) 切片：gTop = 卡片行 [0..FC_HALF)，gBot = 卡片行 [FC_HALF..FC_H)。
 //      [关键修正] 旧版下半自卡片行 22 起，屏幕行 20/21 整段无内容 → 数字被拦腰
 //      横切 2 行，是"圆润度不足"的另一半原因。设计稿下半从 FC_Y+FC_HALF 起，
 //      故此处对齐为行 20，数字只在 1px 中缝线上被覆盖。
@@ -705,7 +701,7 @@ static void buildFlipGlyphs() {
     const int inkH = maxY - minY + 1;
     // 2) 拉伸目标高度 + 中心动态限幅
     int stH = (inkH * gStretch) / 100;
-    if (stH > 38) stH = 38;
+    if (stH > FC_H - 2) stH = FC_H - 2;          // 限 ≤ FC_H-2 防顶边（随卡片放大同步放宽）
     if (stH < 1)  stH = 1;
     int cy    = (FC_H / 2) - gDigDy;                     // 目标中心行（正 do=上移）
     const int cyMin = stH / 2;
@@ -815,6 +811,17 @@ static void syncClockFromPC() {
   gClkSynced = true;
 }
 
+// 由「一次性时间源」（NTP 或串口手动对时）设置内部时钟。
+// 与 syncClockFromPC 的区别：它不是每帧重复的，只跑一次，之后由 tickClock() 自走。
+static void setClock(int y, int mo, int d, int h, int mi, int s) {
+  gClkY = y; gClkM = mo; gClkD = d;
+  gClkH = h; gClkMi = mi; gClkS = s;
+  gClkMs = millis();
+  gClkSynced = true;
+  updateFlipDigits(false);   // 立刻落数字；首次从「无」到「有」不加翻页动画
+  newData = true;
+}
+
 static void drawFlipCard(int i, uint32_t now) {
   if (FD[i].cur < 0) return;
   int x = FC_X[i], ix = x + 1;
@@ -856,10 +863,29 @@ static void drawFlipCard(int i, uint32_t now) {
   // 本方案无卡片描边框（无框彩虹电子风格）
 }
 
+// 还没有任何时间源时的时钟页：六张空卡片 + 各一条短横杠，下方给一行联网状态词。
+// 不画数字 —— 数字字模只有 0-9，画不出 "--:--:--"，空位横杠表达「时间未就绪」最直观。
+static void drawClockPending() {
+  drawPageDots();
+  for (int i = 0; i < 6; i++) {
+    int x = FC_X[i];
+    sprite.fillRoundRect(x, FC_Y, FC_W, FC_HALF, 3, C_CARD_TOP[i]);
+    sprite.fillRoundRect(x, FC_Y + FC_HALF, FC_W, FC_HB, 3, C_CARD_BOT[i]);
+    sprite.fillRect(x, FC_Y + FC_HALF - 4, FC_W, 4, C_CARD_TOP[i]);
+    sprite.fillRect(x + 7, FC_Y + FC_H / 2 - 1, FC_W - 14, 3, C_DIM);
+  }
+  const char* s = netStatusText();
+  sprite.setFont(&lgfx::fonts::Font0);
+  sprite.setTextColor(C_DATE_W, C_BG_W);
+  sprite.setCursor((SCR_W - sprite.textWidth(s)) / 2, 92);
+  sprite.print(s);
+}
+
 static void drawClockPage() {
   sprite.fillScreen(C_BG_W);
   bool offline = (millis() - lastPkt > OFFLINE_MS);
-  if (!gClkSynced || !gFlipReady) { drawNoData(); pushScreen(); return; }
+  if (!gFlipReady) { drawNoData(); pushScreen(); return; }
+  if (!gClkSynced) { drawClockPending(); pushScreen(); return; }   // 还没有时间源：空卡片 + 状态词
   drawPageDots();
 
   uint32_t now = millis();
@@ -887,6 +913,7 @@ static void drawClockPage() {
     sprite.setTextDatum(textdatum_t::middle_center);
     sprite.setTextColor(C_CARD_DIG[gFontIdx % 6], C_BG_W);
     sprite.drawString(tag, SCR_W / 2, 17);
+    sprite.setTextDatum(textdatum_t::top_left);   // 复位，避免泄漏到本帧日期/uptime 与后续页面
   }
 
   // 开机时长（最弱，底部）；离线时 PC 已关机，uptime 无意义，留空
@@ -906,55 +933,7 @@ static void drawClockPage() {
   }
 }
 
-// ============================== 第3页：整面日历表格 =========================
-static void drawCalendarPage() {
-  sprite.fillScreen(C_BG);
-  if (!hasData || !st.year) { drawNoData(); pushScreen(); return; }
-  drawPageDots();
-
-  static const char* WD[7]  = {"Mo","Tu","We","Th","Fr","Sa","Su"};
-  int cw   = 22;                        // 每列宽
-  int gx0  = (SCR_W - cw * 7) / 2;      // 居中（左右各留 3px）
-  int gy0  = 46;                        // 网格起始
-  if (st.month >= 1 && st.month <= 12)
-    drawMonthTitle(st.year, st.month, 22, C_TXT);       // "2026 年 9 月"
-  else {
-    char yb[8];
-    snprintf(yb, sizeof(yb), "%04d", st.year);
-    txtCenter(yb, SCR_W / 2, 22, 14, C_TXT, C_BG);
-  }
-  sprite.drawLine(20, 30, SCR_W - 20, 30, C_LINE);
-
-  int rows = 6;
-  int rh   = (SCR_H - gy0) / rows;      // 每格高
-  // 星期行
-  for (int i = 0; i < 7; i++) txtCenter(WD[i], gx0 + cw * i + cw / 2, 38, 10, C_DIM, C_BG);
-  sprite.drawLine(0, gy0, SCR_W, gy0, C_LINE);
-  // 网格竖线（发丝线）
-  for (int i = 1; i < 7; i++) sprite.drawLine(gx0 + cw * i, gy0, gx0 + cw * i, SCR_H, C_LINE);
-
-  // 日期
-  int fd = (dayOfWeek(st.year, st.month, 1) + 6) % 7;   // 周一为首列
-  int total = daysInMonth(st.year, st.month);
-  int row = 0, col = fd;
-  char ds[3];
-  for (int d = 1; d <= total; d++) {
-    int cx = gx0 + cw * col + cw / 2;
-    int cy = gy0 + rh * row + rh / 2;
-    snprintf(ds, sizeof(ds), "%d", d);
-    if (d == st.day) {
-      sprite.fillCircle(cx, cy, (rh - 4) / 2, C_ACC);          // 今天：强调色实心圆
-      txtCenter(ds, cx, cy, 11, C_BG, C_ACC);
-    } else {
-      uint16_t c = (col >= 5) ? C_DIM : C_TXT;                // 周末灰显
-      txtCenter(ds, cx, cy, 11, c, C_BG);
-    }
-    if (++col > 6) { col = 0; row++; }
-  }
-  pushScreen();
-}
-
-// ============================== 第4页：天气 =================================
+// ============================== 第3页：天气 =================================
 // 数据来自 PC 端 monitor.py（Open-Meteo 免费接口，无需密钥）。
 // 屏幕小，只放最关键信息：城市 + 大图标 + 大号温度 + 天气描述 + 湿度/风速/体感。
 enum WIcon { W_SUN, W_MOON, W_CLOUD, W_OVERCAST, W_FOG, W_RAIN, W_SNOW, W_THUNDER };
@@ -1051,88 +1030,143 @@ static void drawCloud(int cx, int cy, int r, uint16_t c) {
   sprite.fillRoundRect(cx - r * 0.85, cy, (int)(r * 1.7), (int)(r * 0.7), (int)(r * 0.3), c);
 }
 
-// 在 (cx,cy) 画边长约 s 的天气图标；云灰、太阳/月亮/雨用强调或对比色
+// 在 (cx,cy) 画边长约 s 的天气图标（柔光风：暖黄太阳 + 灰蓝云 + 柔蓝雨/雪）
 static void drawWeatherIcon(int type, int cx, int cy, int s) {
   int r = s / 2;
   switch (type) {
-    case W_SUN: {
-      sprite.fillCircle(cx, cy, (int)(r * 0.55), C_ACC);
-      for (int i = 0; i < 8; i++) {
-        float a = i * PI / 4;
-        int x1 = cx + (int)(cosf(a) * r * 0.72), y1 = cy + (int)(sinf(a) * r * 0.72);
-        int x2 = cx + (int)(cosf(a) * r * 0.95), y2 = cy + (int)(sinf(a) * r * 0.95);
-        sprite.drawLine(x1, y1, x2, y2, C_ACC);
-      }
+    case W_SUN: {                                       // 柔光太阳：光晕 + 实体圆（无粗射线）
+      sprite.fillCircle(cx, cy, (int)(r * 0.85), W_GLOW);
+      sprite.fillCircle(cx, cy, (int)(r * 0.50), W_COL_SUN);
       break;
     }
     case W_MOON: {
-      sprite.fillCircle(cx, cy, (int)(r * 0.60), C_ACC);
-      sprite.fillCircle(cx + (int)(r * 0.32), cy - (int)(r * 0.12), (int)(r * 0.55), C_BG); // 挖月牙
+      sprite.fillCircle(cx, cy, (int)(r * 0.60), W_SUB);
+      sprite.fillCircle(cx + (int)(r * 0.32), cy - (int)(r * 0.12), (int)(r * 0.55), W_CARD); // 挖月牙
       break;
     }
     case W_CLOUD: {
-      drawCloud(cx, cy, (int)(r * 0.95), C_DIM);
-      sprite.fillCircle(cx + (int)(r * 0.55), cy - (int)(r * 0.50), (int)(r * 0.22), C_ACC); // 露出小太阳
+      drawCloud(cx, cy, (int)(r * 0.95), W_COL_CLOUD);
+      sprite.fillCircle(cx + (int)(r * 0.55), cy - (int)(r * 0.50), (int)(r * 0.22), W_COL_SUN); // 露出小太阳
       break;
     }
     case W_OVERCAST: {
-      drawCloud(cx, cy + (int)(r * 0.20), (int)(r * 0.70), C_DIM);
-      drawCloud(cx, cy - (int)(r * 0.15), (int)(r * 0.85), C_DIM);
+      drawCloud(cx, cy + (int)(r * 0.20), (int)(r * 0.70), W_COL_CLOUD);
+      drawCloud(cx, cy - (int)(r * 0.15), (int)(r * 0.85), W_COL_CLOUD);
       break;
     }
     case W_FOG: {
-      drawCloud(cx, cy - (int)(r * 0.40), (int)(r * 0.80), C_DIM);
+      drawCloud(cx, cy - (int)(r * 0.40), (int)(r * 0.80), W_COL_CLOUD);
       for (int i = -1; i <= 2; i++)
         sprite.drawLine(cx - (int)(r * 0.7), cy + i * (int)(r * 0.28),
-                        cx + (int)(r * 0.7), cy + i * (int)(r * 0.28), C_DIM);
+                        cx + (int)(r * 0.7), cy + i * (int)(r * 0.28), W_COL_CLOUD);
       break;
     }
     case W_RAIN: {
-      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), C_DIM);
+      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), W_COL_CLOUD);
       for (int i = -1; i <= 1; i++) {
         int xx = cx + i * (int)(r * 0.40);
-        sprite.drawLine(xx, cy + (int)(r * 0.15), xx - 3, cy + (int)(r * 0.60), C_ACC);
+        sprite.drawLine(xx, cy + (int)(r * 0.15), xx - 3, cy + (int)(r * 0.60), W_COL_RAIN);
       }
       break;
     }
     case W_SNOW: {
-      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), C_DIM);
+      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), W_COL_CLOUD);
       for (int i = -1; i <= 1; i++)
-        sprite.fillCircle(cx + i * (int)(r * 0.40), cy + (int)(r * 0.45), 2, C_TXT);
+        sprite.fillCircle(cx + i * (int)(r * 0.40), cy + (int)(r * 0.45), 2, W_COL_RAIN);
       break;
     }
     case W_THUNDER: {
-      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), C_DIM);
+      drawCloud(cx, cy - (int)(r * 0.35), (int)(r * 0.85), W_COL_CLOUD);
       int bx = cx, by = cy + (int)(r * 0.10);
-      sprite.fillTriangle(bx - 4, by,     bx + 4, by,     bx, by + 6,  C_WARN);
-      sprite.fillTriangle(bx - 2, by + 6, bx + 4, by + 6, bx, by + 12, C_WARN);
+      sprite.fillTriangle(bx - 4, by,     bx + 4, by,     bx, by + 6,  W_BOlt);
+      sprite.fillTriangle(bx - 2, by + 6, bx + 4, by + 6, bx, by + 12, W_BOlt);
       break;
     }
   }
 }
 
+// ---- 天气页几何（E 版「霓虹环温」）-----------------------------------------
+// 环径由内容反推：环内要放 Font2×2 的 2 位温度。Font2 = Font16（高 16、数字宽 8），
+// ×2 ⇒ 单元高 32 / 字宽 16，"23" 宽 32。数字墨迹角点距环心 ≈ sqrt(15² + 12²) ≈ 19
+// → 内半径 21 已容下，环壁 5（与 J 页四环同厚）。
+#define W_RO   26          // 环外半径（外径 53）
+#define W_RI   21          // 环内半径 → 环壁 5
+#define W_RCX  80          // 环心 x
+#define W_RCY  62          // 环心 y：环占 y=36..88，环下方留给副指标带
+#define W_HLY  90          // 副指标第一行（最高/最低）
+#define W_SUBY 107         // 副指标第二行（湿度/风速）
+
+// 彩虹环：轨道整圈 + 12 点起顺时针，按「当前温度在当日高低温区间里的位置」填彩虹弧。
+// 色序完全复用时钟页的 C_CARD_DIG（6 色 Candy Rainbow）—— 这就是「结合时钟页」的落点。
+static void drawRainbowRing(int cx, int cy, float frac) {
+  sprite.fillArc(cx, cy, W_RO, W_RI, 0, 360, W_TRACK);       // 轨道：整圈
+  if (frac <= 0.001f) return;                                 // 0 时别调 fillArc(270,270)
+  if (frac > 1.0f) frac = 1.0f;
+  float span = 360.0f * frac;
+  int seg = 36;
+  if (span < 36.0f) { seg = (int)span; if (seg < 4) seg = 4; } // 短弧时分段数按比例缩
+  for (int i = 0; i < seg; i++) {
+    float a0 = 270.0f + span * (float)i / seg;
+    float a1 = 270.0f + span * (float)(i + 1) / seg;
+    if (a1 - a0 < 0.75f) a1 = a0 + 0.75f;                     // 零宽段 fillArc 不画
+    sprite.fillArc(cx, cy, W_RO, W_RI, a0, a1, C_CARD_DIG[(i * 6) / seg]);
+  }
+}
+
+// 环内糖果温度：逐位取糖果彩虹色（第 1 位→粉，第 2 位→橙，与时钟页 HH 同序）。
+// ★ 必须双参数 setTextColor：单参数会画成同色实心块。环内底色就是页面底色 C_BG。
+// 字号按长度自适应：2x 两字符的墨迹角点 ≈19px < 内半径 21（刚好放下）；
+// 3 字符（冬季 -15 之类）在 2x 下宽 48px 会顶穿环壁 → 降为 1x，保证绝不出环。
+static void drawCandyTemp(int cx, int cy, const char* s) {
+  int sz = (strlen(s) >= 3) ? 1 : 2;
+  sprite.setFont(&lgfx::fonts::Font2);
+  sprite.setTextSize(sz);
+  int total = 0;
+  for (const char* p = s; *p; p++) { char t[2] = { *p, 0 }; total += sprite.textWidth(t); }
+  int x = cx - total / 2;
+  int y = cy - (16 * sz) / 2;                                 // Font2 高 16，垂直居中
+  int i = 0;
+  for (const char* p = s; *p; p++, i++) {
+    char t[2] = { *p, 0 };
+    sprite.setTextColor(C_CARD_DIG[i % 6], C_BG);
+    sprite.setCursor(x, y);
+    sprite.print(t);
+    x += sprite.textWidth(t);
+  }
+  sprite.setTextSize(1);
+  // ° 贴数字右上：y=cy-6 处内接圆最宽（x 可达 100.1），半径 2 的圆右缘 99 不会碰环壁
+  sprite.fillCircle(cx + total / 2 + 1, cy - 6, (sz == 2) ? 2 : 1, W_INK);
+}
+
 static void drawWeatherHeader() {
-  sprite.fillRect(0, 0, SCR_W, HEAD_H, C_HEAD);
-  // 城市名：汉字字库齐全就画中文，否则回退英文，避免缺字乱码
+  // 无框深底：不画顶栏条，直接近白字（与时钟页同底 C_BG）
   if (st.wCity[0] && cityCnAllFound(st.wCity)) {
-    drawCityCn(st.wCity, 4, (HEAD_H - CCN_H) / 2, C_TXT);
+    drawCityCn(st.wCity, 4, EDGE_TOP, W_INK);   // y=EDGE_TOP：避开逻辑顶部纯背景带（防撕裂）
   } else {
     const char* city = st.wCityEn[0] ? st.wCityEn : "WEATHER";
-    txtLeft(city, 4, HEAD_H / 2, 12, C_TXT, C_HEAD);
+    sprite.setFont(&lgfx::fonts::Font2);
+    sprite.setTextColor(W_INK, C_BG);
+    sprite.setCursor(4, EDGE_TOP);
+    sprite.print(city);
+    sprite.setFont(&lgfx::fonts::Font0);
   }
   bool stale = !hasData || (millis() - lastPkt > 5000);
-  txtRight(stale ? "--:--" : st.time, 156, HEAD_H / 2, 8, C_DIM, C_HEAD);
-  sprite.drawLine(0, HEAD_H, SCR_W, HEAD_H, C_LINE);
-  drawPageDots();
+  const char* ts = stale ? "--:--" : st.time;
+  sprite.setFont(&lgfx::fonts::Font0);
+  sprite.setTextColor(stale ? C_WARN : W_SUB, C_BG);
+  sprite.setCursor(154 - sprite.textWidth(ts), 8);
+  sprite.print(ts);
+  drawPageDots();       // 分页点：当前页 C_ACC（与总览/时钟页统一）
 }
 
 static void drawWeatherPage() {
-  sprite.fillScreen(C_BG);
-  if (!hasData) { drawNoData(); pushScreen(); return; }
+  sprite.fillScreen(C_BG);                       // 无框近黑底（与时钟页同底）
+
+  if (!hasData) { drawNoData(C_BG); pushScreen(); return; }
   drawWeatherHeader();
 
   if (!st.wHave) {
-    txtCnCenter("无数据", SCR_W / 2, 84, C_DIM);
+    txtCnCenter("无数据", SCR_W / 2, 64, W_INK);
     pushScreen();
     return;
   }
@@ -1140,143 +1174,173 @@ static void drawWeatherPage() {
   int hour = (st.time[0] - '0') * 10 + (st.time[1] - '0');
   bool night = (hour >= 19 || hour < 6);
 
-  // 第一行：左侧大图标 + 右侧超大温度（苹果风左右排布）
-  // 图标下移并缩小，避免云朵顶到顶栏（0~17）造成顶部闪烁
-  drawWeatherIcon(wmoToIcon(st.wCode, night), 40, 46, 24);
+  // ---- 天气描述：小图标 + 中文，整组水平居中，坐在环的上方 ----
+  const char* cond = wmoToTextCn(st.wCode);
+  int n = 0;
+  for (const char* p = cond; *p; ) { if ((unsigned char)*p >= 0x80) { n++; p += 3; } else p++; }
+  int tw = n * WCN_W + (n - 1) * 2;
+  int gw = 14 + 6 + tw;
+  int gx = (SCR_W - gw) / 2;
+  drawWeatherIcon(wmoToIcon(st.wCode, night), gx + 7, 27, 14);
+  txtCnCenter(cond, gx + 14 + 6 + tw / 2, 27, W_INK);
+
+  // ---- 彩虹环 + 环内糖果温度（本体：温度在当日区间里的位置）----
+  float frac = 0.5f;
+  if (st.wHi > st.wLo) frac = (st.wTemp - st.wLo) / (st.wHi - st.wLo);
+  drawRainbowRing(W_RCX, W_RCY, frac);
 
   char tbuf[8];
   snprintf(tbuf, sizeof(tbuf), "%d", (int)(st.wTemp + (st.wTemp >= 0 ? 0.5f : -0.5f)));
-  sprite.setFont(&lgfx::fonts::Font2);
-  sprite.setTextSize(3);
-  int nw = sprite.textWidth(tbuf);
-  int startX = 150 - (nw + 16);       // 温度块整体右对齐到 x=150
-  int numY = 46 - 24;                 // Font2×3 = 48 高，中心 46
-  sprite.setTextColor(C_TXT, C_BG);
-  sprite.setCursor(startX, numY);
-  sprite.print(tbuf);
-  sprite.fillCircle(startX + nw + 3, numY + 6, 3, C_TXT);   // °
-  sprite.setTextSize(1);
-  sprite.setCursor(startX + nw + 8, numY + 30);
-  sprite.print("C");
-  sprite.setFont(&lgfx::fonts::Font0);   // 复位文字状态，避免大字号带进后续 txt*
-  sprite.setTextSize(1);
+  drawCandyTemp(W_RCX, W_RCY, tbuf);
 
-  // 天气描述（中文，灰，垂直居中）—— 整体上移 3mm（≈13px）
-  txtCnCenter(wmoToTextCn(st.wCode), SCR_W / 2, 69, C_DIM);
-
-  // 当日最高/最低（中文标签 + 数字）。必须用 drawCnStr 的返回值推进，
-  // 否则双字标签宽度算错，数字会压在第二个汉字上叠在一起。
-  char ht[8], lt[8];
+  // ---- 副指标带：两行两列（中文标签灰 + 数字近白）----
+  char ht[8], lt[8], hum[12], wnd[12];
   snprintf(ht, sizeof(ht), "%d", (int)(st.wHi + 0.5f));
   snprintf(lt, sizeof(lt), "%d", (int)(st.wLo + 0.5f));
-  int hlY = 83;   // 整体上移 3mm（≈13px）
+  if (st.wHum >= 0) snprintf(hum, sizeof(hum), "%d%%", st.wHum); else strcpy(hum, "--");
+  snprintf(wnd, sizeof(wnd), "%d", (int)(st.wWind + 0.5f));
+  sprite.setFont(&lgfx::fonts::Font0);          // 复位：大字号不得带进副指标
+  sprite.setTextSize(1);
+
   int segW = cnStrW("最高") + sprite.textWidth(ht) + 10
            + cnStrW("最低") + sprite.textWidth(lt);
   int x = (SCR_W - segW) / 2;
-  sprite.setTextColor(C_DIM, C_BG); x += drawCnStr("最高", x, hlY, C_DIM);
-  sprite.setTextColor(C_TXT, C_BG); sprite.setCursor(x, hlY); sprite.print(ht); x += sprite.textWidth(ht) + 10;
-  sprite.setTextColor(C_DIM, C_BG); x += drawCnStr("最低", x, hlY, C_DIM);
-  sprite.setTextColor(C_TXT, C_BG); sprite.setCursor(x, hlY); sprite.print(lt);
+  x += drawCnStr("最高", x, W_HLY, W_SUB);
+  sprite.setTextColor(W_INK, C_BG); sprite.setCursor(x, W_HLY + 4); sprite.print(ht); x += sprite.textWidth(ht) + 10;
+  x += drawCnStr("最低", x, W_HLY, W_SUB);
+  sprite.setTextColor(W_INK, C_BG); sprite.setCursor(x, W_HLY + 4); sprite.print(lt);
 
-  // 底部副指标：湿度 / 风速（中文标签 + 数字）
-  char hum[12], wnd[12];
-  if (st.wHum >= 0) snprintf(hum, sizeof(hum), "%d%%", st.wHum); else strcpy(hum, "--");
-  snprintf(wnd, sizeof(wnd), "%d", (int)(st.wWind + 0.5f));
-  int subY = 101;   // 整体上移 3mm（≈13px）
   int segW2 = cnStrW("湿度") + sprite.textWidth(hum) + 10
             + cnStrW("风速") + sprite.textWidth(wnd);
   int x2 = (SCR_W - segW2) / 2;
-  sprite.setTextColor(C_DIM, C_BG); x2 += drawCnStr("湿度", x2, subY, C_DIM);
-  sprite.setTextColor(C_TXT, C_BG); sprite.setCursor(x2, subY); sprite.print(hum); x2 += sprite.textWidth(hum) + 10;
-  sprite.setTextColor(C_DIM, C_BG); x2 += drawCnStr("风速", x2, subY, C_DIM);
-  sprite.setTextColor(C_TXT, C_BG); sprite.setCursor(x2, subY); sprite.print(wnd);
+  x2 += drawCnStr("湿度", x2, W_SUBY, W_SUB);
+  sprite.setTextColor(W_INK, C_BG); sprite.setCursor(x2, W_SUBY + 4); sprite.print(hum); x2 += sprite.textWidth(hum) + 10;
+  x2 += drawCnStr("风速", x2, W_SUBY, W_SUB);
+  sprite.setTextColor(W_INK, C_BG); sprite.setCursor(x2, W_SUBY + 4); sprite.print(wnd);
 
   pushScreen();
 }
 
-// ============================== 第1页：总览（《我的世界》主题） ==============
-// 视觉规格全部取自 MC 官方：16 色格式化调色板 / GUI 灰阶 / 经验条绿 #80FF20。
-// 三条结构规则（比色值更关键）：
-//   ① 立体边框 —— 凸起=上/左亮、下/右暗；凹陷反过来（MC 里所有 GUI 元素都遵守）
-//   ② 文字带右下 1px 投影
-//   ③ 方块图标嵌在物品栏式凹槽里
-// 字体是 5x7 点阵（见 mc_theme.h）：本页内容全 ASCII，不需要中文字库。
-static const uint16_t MCUI_LBL_SH = RGB(0x1A, 0x1A, 0x1A);  // 标签投影（与设计稿同值）
+// ============================== 第1页：总览（四环仪表） ======================
+// 设计稿 = tools/st_ui_themes4.py 的 draw_J() → tools/st_theme_j_ring_4x.png。
+// ★ 本段参数与设计稿逐值对应；改这里必须同步改设计稿，否则「设计稿 = 验收标准」断链。
+//
+// 为什么是「环」不是「条」：小屏表达百分比的标准做法是环形 gauge
+// （watchOS complication 的 fillFraction 那套）——形状本身承载数值，不必再画一条
+// 横线配一个数字。四项等权 2x2，扫视就是读四个环。
+// 上一版 MC 主题（方块图标 + 分段经验条 + 凹槽边框）已整体废弃。
+//
+// ★ fillArc 的角度语义已用移植法验证（tools/_verify_arc.py：把 LovyanGFX 的
+//   fill_arc_helper 逐行翻成 Python 后跑位图比对）：
+//     0° = 3 点，角度增加 = 屏幕顺时针 ⇒ 12 点起顺时针 = a0=270, a1=270+3.6*pct。
+//   实测 pct=25/50/75/100 的像素数 192/378/558/744，与满环 744 精确成比例。
+static const uint16_t J_BG    = RGB(0x0E, 0x11, 0x16);  // 深蓝黑底
+static const uint16_t J_INK   = RGB(0xE8, 0xED, 0xF2);  // 环内主值（近白）
+static const uint16_t J_LABEL = RGB(0x8A, 0x95, 0xA1);  // 环内标签（灰）
+static const uint16_t J_DIM   = RGB(0x5A, 0x64, 0x6F);  // 顶栏日期（比标签再暗一档）
+static const uint16_t J_TRACK = RGB(0x23, 0x2A, 0x32);  // 环轨道（未填充段）
+static const uint16_t J_ACC   = RGB(0x3D, 0x8B, 0xFD);  // 正常：四项**共用**一个柔蓝
+static const uint16_t J_CRIT  = RGB(0xFF, 0x2A, 0x2A);  // 过高：整环转红（纯正的红）
+// ★ 色值不是随便挑的：旧值 #F04438 绿分量 G=68/255（色相 4°），在深色底上是**朱红/橙红**，
+//   用户明确反馈"看着像橙红，不是红色"。新值 G=42/255（色相 0°），RGB565 量化后显示
+//   ≈ (255,40,41)，绿分量比旧值低 42% —— 这才是"红"。改色值只动这一个常量即可。
 
-// MC 顶栏（深色面板条 + 方块页码）已按用户要求移除：状态页顶部不再画页面条，
-// 顶部留为背景色，时钟带上移贴近顶部。SPI 端点安全带仍由 flipBuf180() 兜底。
+// ★ 本页用色纪律（三条，比色值更重要）：
+//   ① **只有两个颜色**：蓝 = 正常，红 = 数值过高。绝不引入第三个颜色 ——
+//      曾经有一档 80..89% 的琥珀色，被用户明确否掉（原话："UI 设计是蓝色为正常数值，
+//      数值过高就是红色圆环"）。多一个中间色只会让"偏高"和"过高"长得像，反而分不出；
+//   ② 阈值不能定低：**80% 起转红**。Windows 上 RAM 60% 是常态、GPU 瞬时 60% 也正常，
+//      定低了等于"到处都是警告"＝没有警告（实测踩过这个坑）；
+//   ③ NET 不参与变色 —— 网速快不是故障，永远走正常蓝。
+#define J_CRIT_PCT 80
 
+#define J_RO 22          // 环外半径（外径 45px，含中心像素）
+#define J_RI 17          // 环内半径 → 环壁 5px
+// ★ 环径由内容反推，不是先定环：最宽的 "1.2M"（1x bold）= 4*6 = 24px，
+//   内半径 17 → 内接正方形 17*2/√2 ≈ 24.04px，刚好放下；再小 1px 就顶穿环壁。
+//   （曾试过先定外径 50，结果环内只能塞 7px 小字，观感"环大内容空"。）
+// 4 环中心（2x2）：横向间距 64、纵向间距 50；最低缘 y = 97+22 = 119 <= 123（EDGE_BOT 之上）
+static const int8_t J_CX[4] = {48, 112, 48, 112};
+static const int8_t J_CY[4] = {47, 47, 97, 97};
 
-
-// 一行指标：凹槽方块图标 + 标签 + 分段经验条 + 加粗主值 + 灰副值
-static void drawMcRow(int idx, const uint16_t* icon, const char* label, int pct,
-                      const char* val, const char* aux, uint16_t base) {
-  const int rh = ROW_H, top = BODY_TOP + idx * rh;
-  const int c1 = top + 4;    // 主行：标签 / 条 / 主值
-  const int c2 = top + 14;   // 副行：副值
-
-  mcIcon(icon, 2, top + 4);
-  mcStr(label, 18, c1, MCUI_GRAY, 1, MCUI_LBL_SH, false);
-  mcXpBar(52, c1, 76, 6, pct, mcLoadColor(pct, base));
-  mcStrRight(val, 156, c1, MCUI_WHITE, 1, MCUI_SHADOW, true);
-  if (aux[0]) mcStr(aux, 52, c2, MCUI_DGRAY, 1, 0, false);
+// 环色：只有两档 —— 正常 = 蓝，数值过高 = 红；NET 与无数据固定走正常蓝
+static uint16_t jColor(const char* label, int pct) {
+  if (label[0] == 'N' || pct < 0) return J_ACC;
+  if (pct >= J_CRIT_PCT) return J_CRIT;
+  return J_ACC;
 }
 
+// 一圈环 + 进度弧（12 点起顺时针）
+static void jRing(int cx, int cy, int pct, uint16_t col) {
+  sprite.fillArc(cx, cy, J_RO, J_RI, 0, 360, J_TRACK);   // 轨道：整圈
+  if (pct <= 0) return;                                   // 0% 时别调 fillArc(270,270)
+  int p = pct > 100 ? 100 : pct;
+  sprite.fillArc(cx, cy, J_RO, J_RI, 270.0f, 270.0f + 3.6f * p, col);
+}
+
+// 网速 → 对数刻度百分比（满格 10MB/s）
+// 线性刻度下日常流量在屏上等于看不见：动态范围 0.1KB/s ~ 100MB/s 跨六个数量级；
+// 取对数后 10K→26%、340K→63%、1.2M→77%、5M→92%。这条刻度是"速率表"，不是占用率。
+static int ratePct(float kbs, float full = 10240.0f) {
+  if (kbs <= 0) return 0;
+  float v = 100.0f * log10f(1.0f + kbs) / log10f(1.0f + full);
+  return v > 100.0f ? 100 : (int)(v + 0.5f);
+}
+
+// 一环 + 环内两行字（1x 标签 / 1x 加粗值），各自水平居中
+static void jCell(int i, const char* label, const char* val, int pct) {
+  const int cx = J_CX[i], cy = J_CY[i];
+  jRing(cx, cy, pct, jColor(label, pct));
+  mcStr(label, cx - mcStrW(label, 1, false) / 2, cy - 10, J_LABEL, 1, 0, false);
+  mcStr(val,   cx - mcStrW(val,   1, true ) / 2, cy +  2, J_INK,   1, 0, true);
+}
+
+// ★ 本页上线时做过一次串口自检（tools/_do_flash.py 的 4.5 步用 probe_diag.py
+//   注入帧后读取 sprite 缓冲），四环四方位采样与预期逐位吻合，证据留在
+//   2026-09-19 的工作日志里。自检代码已按约定删除，不留常驻诊断。
 static void drawOverview() {
   bool stale = !hasData || (millis() - lastPkt > 5000);
-  sprite.fillScreen(MCUI_BG);
-  if (!hasData) { drawNoData(MCUI_BG); pushScreen(); return; }
-  // ---- 时钟带：大时钟 2 倍字 + 日期/开机时长 1 倍字横排其后、底边对齐。
-  // 时钟 2x 占 y=3..16（7px 字形 ×2），日期 1x 占 y=10..16 → 底边同在 y=16，观感是同一横行。
-  // 下移 2px 的原因：逻辑 y=0..2 必须留成纯背景（EDGE_TOP=3），否则时钟顶部压在撕裂带里，
+  sprite.fillScreen(J_BG);
+  if (!hasData) { drawNoData(J_BG); pushScreen(); return; }
+
+  // ---- 时钟带：2x 大时钟 + 右侧 1x 日期/开机时长，底边同在 y=16（观感是同一横行）。
+  // 起点 y=3 的原因：逻辑 y=0..2 必须留成纯背景（EDGE_TOP=3），否则时钟顶部压在撕裂带里，
   // 每秒跳秒时会被 SPI 推屏/面板扫描的时序冲突切成可见闪烁。
-  mcStr(stale ? "--:--" : st.time, 2, 3, MCUI_WHITE, 2, MCUI_SHADOW, false);
+  // 日期改为右对齐 156（与设计稿一致），不再是左对齐的 66。
+  mcStr(stale ? "--:--" : st.time, 4, 3, J_INK, 2, 0, false);
   char dt[28];
   snprintf(dt, sizeof(dt), "%s %s", st.date, stale ? "OFF" : st.uptime);
-  mcStr(dt, 66, 10, stale ? MCUI_RED : MCUI_GRAY, 1, MCUI_LBL_SH, false);
-  // ---- 顶带下沿的 MC 凹槽分隔线（暗线 + 黑缝，共 2px）：把「时钟区」与「指标区」分开，
-  // 取代已被移除的顶栏面板条。属静态内容，落在撕裂带里也不会闪。
-  sprite.writeFastHLine(0, 17, SCR_W, MCUI_LO);
-  sprite.writeFastHLine(0, 18, SCR_W, MCUI_BLACK);
+  mcStrRight(dt, 156, 10, stale ? J_CRIT : J_DIM, 1, 0, false);
+  // 注：J 版不再画 MC 凹槽分隔线 —— 环本身已把内容分成四块，再加线是杂质。
 
-  char buf[16], aux[20];
-  // CPU（基色 = MC 青 §b）
+  // ---- 四项指标（DSK 按需求移除）：2x2 四环，
+  //      顺序 = 左上 CPU / 右上 RAM / 左下 NET / 右下 GPU，与 J_CX/J_CY 数组同序。
+  char buf[16];
   int cp = st.cpu >= 0 ? st.cpu : 0;
   snprintf(buf, sizeof(buf), "%d%%", cp);
-  snprintf(aux, sizeof(aux), "%dC", dispTemp(st.cpuT > -900 ? st.cpuT : 0));
-  drawMcRow(0, MC_ICON_CPU, "CPU", cp, buf, aux, MCUI_AQUA);
-  // RAM（金 §6）
+  jCell(0, "CPU", buf, st.cpu);
+
   int mp = st.mem >= 0 ? st.mem : 0;
   snprintf(buf, sizeof(buf), "%d%%", mp);
-  snprintf(aux, sizeof(aux), "%.1fG", st.memGB >= 0 ? st.memGB : 0);
-  drawMcRow(1, MC_ICON_RAM, "RAM", mp, buf, aux, MCUI_GOLD);
-  // NET（无百分比含义：经验条留空槽，主值=下行、副值=上行）
-  char dn[12], up[12];
+  jCell(1, "RAM", buf, st.mem);
+
+  // NET：主值 = 下行速率；弧长 = 下行速率的对数刻度值。
+  // monitor.py 的 JSON 里一直在发 "u"/"d"（KB/s，float），main.cpp 也已解析成
+  // st.upKB/st.dnKB —— 旧代码只是画的时候把 pct 写死成 -1，把这条信息丢了。
+  // 所以这是纯固件端改动，不碰 PC 端。
+  char dn[12];
   fmtRate(st.dnKB, dn, sizeof(dn));
-  fmtRate(st.upKB, up, sizeof(up));
-  snprintf(aux, sizeof(aux), "^%s", up);
-  drawMcRow(2, MC_ICON_NET, "NET", -1, dn, aux, MCUI_BLUE);
-  // GPU（品红 §d）
+  jCell(2, "NET", dn, ratePct(st.dnKB));
+
   int gp = st.gpu >= 0 ? st.gpu : 0;
   snprintf(buf, sizeof(buf), "%d%%", gp);
-  snprintf(aux, sizeof(aux), "%dC", dispTemp(st.gpuT > -900 ? st.gpuT : 0));
-  drawMcRow(3, MC_ICON_GPU, "GPU", gp, buf, aux, MCUI_LPURPLE);
-  // DSK（绿 §a）
-  int dp = st.disk >= 0 ? st.disk : 0;
-  snprintf(buf, sizeof(buf), "%d%%", dp);
-  snprintf(aux, sizeof(aux), "%.0fG", st.dskFreeGB >= 0 ? st.dskFreeGB : 0);
-  drawMcRow(4, MC_ICON_DSK, "DSK", dp, buf, aux, MCUI_GREEN);
+  jCell(3, "GPU", buf, st.gpu);
 
   pushScreen();
 }
 
 // ============================== 日期工具 ====================================
-// Sakamoto 算法：返回 0=周日..6=周六
-static int dayOfWeek(int y, int m, int d) {
-  static const int t[12] = {0,3,2,5,0,3,5,1,4,6,2,4};
-  if (m < 3) y -= 1;
-  return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
-}
+// 仅保留 daysInMonth：时钟页离线走时用它做月末回绕（dayOfWeek 随日历页一并删除）
 static int daysInMonth(int y, int m) {
   static const int d[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
   if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) return 29;
@@ -1285,15 +1349,55 @@ static int daysInMonth(int y, int m) {
 
 // ============================== 渲染分发 ====================================
 static void render() {
+  // ★ 每帧强制复位文字基准为 top_left：时钟页字体切换块会把 datum 设成
+  //   middle_center（drawString 用），用完若泄漏到本帧外的其它页面，
+  //   LovyanGFX 的 print/write 会对「带 middle 位」的 datum 做 -h/2 竖向位移，
+  //   导致天气/总览页所有 setCursor+print 的数字整行上移、压进图标/标签。
+  sprite.setTextDatum(textdatum_t::top_left);
   if      (curView == VIEW_OVERVIEW) drawOverview();
   else if (curView == VIEW_CLOCK)    drawClockPage();
-  else if (curView == VIEW_CALENDAR) drawCalendarPage();
   else                               drawWeatherPage();
+}
+
+// ============================== 串口控制台命令 ==============================
+// 这些行不是 PC 的 JSON 数据帧，而是给人用的配置命令：
+//   WIFI:<ssid>,<password>    写入/覆盖一组 WiFi 凭据（存进 NVS）并立刻试连
+//   WIFICLR                   清空全部凭据
+//   TIME:2026-09-19 13:40:00  手动对时（没有网络时的兜底手段）
+//   NET?                      打印当前联网状态
+static void cmdWifi(const char* arg) {
+  char buf[100];
+  strlcpy(buf, arg, sizeof(buf));
+  char* comma = strchr(buf, ',');
+  if (comma) *comma = '\0';
+  const char* ssid = buf;
+  const char* pass = comma ? (comma + 1) : "";
+  if (!netAddCredential(ssid, pass)) {
+    Serial.println("[NET] bad credential (ssid 1-32 bytes, pass 0-64 bytes)");
+    return;
+  }
+  netRequestSync();          // 配好立刻试一次，不必等重试周期
+}
+
+static void cmdTime(const char* arg) {
+  int y, mo, d, h, mi, s;
+  if (sscanf(arg, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s) != 6) {
+    Serial.println("[TIME] format: TIME:YYYY-MM-DD HH:MM:SS");
+    return;
+  }
+  setClock(y, mo, d, h, mi, s);
+  Serial.printf("[TIME] clock set to %04d-%02d-%02d %02d:%02d:%02d\n", y, mo, d, h, mi, s);
 }
 
 // ============================== 串口解析 ====================================
 // 用固定容量文档：解析过程零堆分配，杜绝长期运行的内存碎片
 static void handleLine(const char* line) {
+  // ---- 先分流控制台命令（非 JSON；不走 JSON 解析，也不计进坏帧）----
+  if (strncmp(line, "WIFI:", 5) == 0) { cmdWifi(line + 5); return; }
+  if (strncmp(line, "TIME:", 5) == 0) { cmdTime(line + 5); return; }
+  if (strcmp(line, "WIFICLR") == 0)   { netClearCredentials(); return; }
+  if (strcmp(line, "NET?") == 0)      { netPrintStatus(Serial); return; }
+
   // ArduinoJson 7 把 StaticJsonDocument 标了 deprecated，官方推荐 JsonDocument，
   // 但后者走堆分配，1Hz 常年跑下去迟早碎片。这里坚持用静态文档并局部屏蔽警告。
   // 容量按「字段数 × 每成员约 16B + 键值字符串」估：天气字段加进来后 512 已不够，
@@ -1423,7 +1527,7 @@ void drawSelfTestPattern() {
 // ============================== UI 状态机 ==================================
 // 极简：只有 ST_MON。短按循环切页（带 170ms 幕布过渡），长按切换时钟页数字字体。
 static void handleUi() {
-  if (evNext) goPage((ViewPage)(((int)curView + 1) % N_PAGES));   // 循环：总览→时钟→日历→天气→总览
+  if (evNext) goPage((ViewPage)(((int)curView + 1) % N_PAGES));   // 循环：总览→时钟→天气→总览
   if (evFont) {
     // 长按：换下一套字体 → 重新烘焙叶片 → 若不在时钟页则跳过去，便于立刻比对。
     gFontIdx = (uint8_t)((gFontIdx + 1) % CLOCK_FONT_COUNT);
@@ -1494,6 +1598,7 @@ void setup() {
 #endif
 
   render();
+  netBegin();   // 载入 NVS 里的 WiFi 凭据；PC 不在线时会自动联网对时
   Serial.printf("[BOOT] render done heap=%u\n", (unsigned)ESP.getFreeHeap());
 }
 
@@ -1525,11 +1630,37 @@ void loop() {
   pumpSerial();
   btnPoll();
   tickClock();   // 离线时内部时钟继续走时
-  // PC 离线（断流超过 OFFLINE_MS）→ 自动跳回时钟页，离线继续走时（边沿触发一次）
-  bool online = (millis() - lastPkt <= OFFLINE_MS);
-  if (gWasOnline && !online && curView != VIEW_CLOCK) goPage(VIEW_CLOCK);
-  gWasOnline = online;
   uint32_t now = millis();
+
+  // 在线 / 离线判定与翻页策略：
+  // ・开机默认就是时钟页（curView 初值 VIEW_CLOCK）→ 只插电源不开机即直接是钟，没有「未连接」闪屏。
+  // ・上电后首次收到 PC 数据帧 ⇒ 确认插着电脑在线 ⇒ 从时钟页升级到总览页开始正常轮播。
+  // ・运行中断流（PC 离线）超过 OFFLINE_MS ⇒ 回到时钟页当钟用并锁定，直到 PC 重新连上。
+  // ★ online 必须「确实收到过帧」才算在线：lastPkt 初值 0 会让「上电头 5 秒」被误判为在线
+  //   （millis()-0<=5000），从而把刚开机的设备错误地拉去总览页。只插电源不开机时，
+  //   lastPkt 一直为 0 ⇒ online 恒为 false ⇒ 开机默认时钟页不会被抢走，直接就是钟。
+  bool online = (lastPkt != 0) && (millis() - lastPkt <= OFFLINE_MS);
+  if (online && !gFirstOnlineDone) {
+    gFirstOnlineDone = true;                       // 首帧到达：插着电脑，升级到总览页
+    if (curView != VIEW_OVERVIEW) goPage(VIEW_OVERVIEW);
+  }
+  if (!online) {
+    // 运行中断流 → 守时钟（开机默认已在时钟页，这里主要处理「运行中电脑断开」的情况）。
+    if (!gOfflineHold && now > OFFLINE_MS + 1000) {
+      gOfflineHold = true;
+      if (curView != VIEW_CLOCK) goPage(VIEW_CLOCK);
+    }
+  } else if (gOfflineHold) {
+    gOfflineHold = false;                          // PC 重新连上 → 回到总览页继续监控
+    if (curView != VIEW_OVERVIEW) goPage(VIEW_OVERVIEW);
+  }
+
+  // 独立对时：PC 在线且已有时间时 pcTime=true → 模块完全不碰 WiFi；
+  // 只有「没有 PC 时间源」时才联网取时间（对上一次之后每 6 小时才重校）。
+  bool pcTime = online && gClkSynced;
+  netPoll(now, pcTime);
+  int ny, nmo, nd, nh, nmi, ns;
+  if (netTakeTime(ny, nmo, nd, nh, nmi, ns)) setClock(ny, nmo, nd, nh, nmi, ns);
 
   // 翻页幕布过渡：用 BG 幕布从左锚定向右展开，露出已画好的新页
   if (transActive) {
@@ -1552,6 +1683,12 @@ void loop() {
   }
 
   if (evNext) handleUi();
+
+  // 自动轮播：PC 在线时每 10 秒切下一页（总览→时钟→天气→总览），本页停留 10 秒。
+  // 手动按键切页会把 pageDwellT 清零，故刚切过去不会被立刻带走。
+  // 离线（PC 关机）不轮播 —— 那时应停在时钟页当钟用，轮到总览/天气只会显示未连接。
+  if (online && now - pageDwellT >= AUTO_PAGE_MS)
+    goPage((ViewPage)(((int)curView + 1) % N_PAGES));
 
   if (uiState == ST_MON && curView == VIEW_CLOCK) {
     updateFlipDigits(true);   // 在线=随帧同步；离线=内部时钟走时，秒变即翻页
@@ -1581,9 +1718,11 @@ void loop() {
   static uint32_t lastHb = 0;
   if (now - lastHb >= 3000) {
     lastHb = now;
-    Serial.printf("[HB] view=%d rx=%lu bad=%lu data=%d heap=%u\n",
+    // net= 与 t= 是「设备脱离电脑后到底有没有时间」的客观凭据（不必靠看屏）
+    Serial.printf("[HB] view=%d rx=%lu bad=%lu data=%d net=%s t=%02d:%02d:%02d heap=%u\n",
                   (int)curView, (unsigned long)rxOk, (unsigned long)rxBad,
-                  (int)hasData, (unsigned)ESP.getFreeHeap());
+                  (int)hasData, netStatusText(),
+                  gClkH, gClkMi, gClkS, (unsigned)ESP.getFreeHeap());
   }
 
   delay(2);   // 让出 CPU，避免 loop 空转把 IDLE 饿死触发任务看门狗
