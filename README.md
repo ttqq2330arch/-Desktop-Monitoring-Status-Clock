@@ -29,6 +29,15 @@ PC 端采集本机状态 → USB 串口 1Hz 推 JSON → ESP32 负责显示。
 总览 · 3x 放大　｜　磁盘方块图标细节　｜　时钟配色备选
 </sub></p>
 
+<p align="center">
+  <img src="docs/img/real-01-weather.jpg" width="32%">
+  <img src="docs/img/real-02-clock.jpg" width="32%">
+  <img src="docs/img/real-03-overview.jpg" width="32%">
+</p>
+<p align="center"><sub>
+实物 · 天气页　｜　实物 · 翻页时钟　｜　实物 · 总览页（3D 打印外壳，模型见 <code>case/</code>）
+</sub></p>
+
 更多设计稿在 `docs/img/`，全部由 `esp32/tools/` 下的生成器离线产出。
 
 ---
@@ -474,6 +483,8 @@ pc/
 docs/
   接线图.svg
   img/                    精选设计稿（生成器产出的原图在 esp32/tools/，不入库）
+drivers/                  CH340/CH341 USB 串口驱动（含一键安装 install_driver.bat）
+case/                     3D 打印外壳模型（桌面时钟.3mf）
 licenses/                 随仓库分发的字体许可全文（OFL 1.1）
 ```
 
