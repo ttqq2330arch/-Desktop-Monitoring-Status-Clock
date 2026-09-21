@@ -26,6 +26,8 @@ import json
 import re
 import os
 import socket
+import http.client
+import ssl
 import subprocess
 import sys
 import threading
@@ -285,6 +287,32 @@ CITY_ZH = {
 CITY_EN = {v: k for k, v in CITY_ZH.items()}
 
 
+# ---- 强制 IPv4 的 HTTPS 通道 -----------------------------------------
+# [2026-09-21] 家庭宽带常见故障：系统把 IPv6 地址排在 IPv4 前面，urllib 先连
+# IPv6，而很多家庭宽带的 IPv6 路由其实不通（或经运营商 4in6 隧道超时），于是
+# open-meteo 等请求卡住 8 秒后超时 -> 屏上长期「无数据」。
+# 这里用自定义 connection 类强制 AF_INET，只走 IPv4，绕开这个坑；同时支持
+# 代理隧道（_tunnel），本地/系统代理出口都能用。
+class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        # 只用 IPv4：先解析出 A 记录，再用 IP 字面量建连，避免系统优先 IPv6 卡顿
+        addrs = socket.getaddrinfo(
+            self.host, self.port, socket.AF_INET, socket.SOCK_STREAM
+        )
+        ip = addrs[0][4][0]
+        addr = socket.create_connection((ip, self.port), self.timeout)
+        self.sock = addr
+        if self._tunnel_host:
+            self._tunnel()
+        ctx = self._context or ssl.create_default_context()
+        self.sock = ctx.wrap_socket(self.sock, server_hostname=self.host)
+
+
+class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_IPv4HTTPSConnection, req)
+
+
 class WeatherProvider:
     def __init__(self, tune_file):
         self.tune_file = tune_file
@@ -352,33 +380,67 @@ class WeatherProvider:
     # WinError 10061「目标计算机积极拒绝」——四个源全挂，屏上长期显示「无数据」。
     # 对策：**直连优先，失败再回落系统代理**，并把本次选中的出口记下来复用。
     # 天气源里 pconline 是国内的、open-meteo 一般也可直连，直连成功就不必受代理影响。
-    def _do_open(self, req, timeout, use_proxy):
-        if use_proxy:
-            return urllib.request.build_opener().open(req, timeout=timeout)
-        # ProxyHandler({}) 显式清空代理 → 真正直连，绕开注册表里的失效代理
-        return urllib.request.build_opener(
-            urllib.request.ProxyHandler({})
-        ).open(req, timeout=timeout)
+    def _do_open(self, req, timeout, use_proxy, force_v4=False, proxy_url=None):
+        handlers = []
+        if force_v4:
+            handlers.append(_IPv4HTTPSHandler())
+        if use_proxy and proxy_url:
+            # 指定本地代理端口（Clash/v2ray 等）
+            handlers.append(urllib.request.ProxyHandler(
+                {"http": proxy_url, "https": proxy_url}))
+        elif use_proxy:
+            # 系统代理：不加 ProxyHandler，build_opener 默认读环境/系统代理
+            pass
+        else:
+            # 直连：ProxyHandler({}) 显式清空代理，绕开注册表里的失效代理
+            handlers.append(urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(*handlers).open(req, timeout=timeout)
 
     def _open(self, url, timeout=8):
-        """返回可读的响应对象。直连优先、代理兜底；两者都失败则抛最后一个异常。"""
+        """返回可读的响应对象。出口优先级：
+        1) 直连（强制 IPv4，解决家庭宽带 IPv6 卡顿）；2) 系统代理（强制 IPv4）；
+        3) 探测常见本地代理端口（有 Clash/v2ray 但没设系统代理）。
+        全失败才抛最后一个异常。
+        """
         req = urllib.request.Request(
             url, headers={"User-Agent": "pc-monitor/1.0"}
         )
-        if self._route == "proxy":
-            order = (True, False)
+        if self._route and self._route.startswith("proxy:"):
+            port = self._route.split(":", 1)[1]
+            order = [(True, f"http://127.0.0.1:{port}"), (False, None), (True, None)]
+        elif self._route == "proxy":
+            order = [(True, None), (False, None)]
         else:
-            order = (False, True)
+            order = [(False, None), (True, None)]
         last = None
-        for use_proxy in order:
+        for use_proxy, proxy_url in order:
             try:
-                r = self._do_open(req, timeout, use_proxy)
-                if self._route != ("proxy" if use_proxy else "direct"):
-                    self._route = "proxy" if use_proxy else "direct"
-                    print(f"[天气] 网络出口：{'系统代理' if use_proxy else '直连'}")
+                r = self._do_open(req, timeout, use_proxy, force_v4=True, proxy_url=proxy_url)
+                if use_proxy and proxy_url:
+                    self._route = f"proxy:{proxy_url.rsplit(':', 1)[1]}"
+                    tag = f"本地代理 {proxy_url}"
+                elif use_proxy:
+                    self._route = "proxy"
+                    tag = "系统代理"
+                else:
+                    self._route = "direct"
+                    tag = "直连"
+                print(f"[天气] 网络出口：{tag}")
                 return r
             except Exception as e:
                 last = e
+        # 主出口都失败：探测常见本地代理端口（有代理软件但没配系统代理）
+        for p in (7890, 7891, 10808, 10809, 1080, 8080):
+            try:
+                r = self._do_open(
+                    req, 3, True, force_v4=True,
+                    proxy_url=f"http://127.0.0.1:{p}",
+                )
+                self._route = f"proxy:{p}"
+                print(f"[天气] 网络出口：本地代理 :{p}")
+                return r
+            except Exception:
+                continue
         raise last
 
     def _http_get(self, url, timeout=8):
