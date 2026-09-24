@@ -1,0 +1,22 @@
+{
+  "_说明": "把本文件复制为 printers.json（同目录）并填入你自己的值。printers.json 含凭据，已被 .gitignore 排除，不会进仓库。",
+  "_printer1": "第 1 台打印机 → 设备端第 4 页（VIEW_PRINTER1）",
+  "_printer2": "第 2 台打印机 → 设备端第 5 页（VIEW_PRINTER2）",
+
+  "printer1": {
+    "enabled": true,
+    "type": "creality_moonraker",
+    "name": "Creality",
+    "ip": "192.168.1.100",
+    "port": 7125,
+    "api_key": ""
+  },
+
+  "printer2": {
+    "enabled": true,
+    "type": "anycubic_cloud",
+    "name": "Anycubic",
+    "token": "PASTE_XX_Token_HERE",
+    "device_name": ""
+  }
+}

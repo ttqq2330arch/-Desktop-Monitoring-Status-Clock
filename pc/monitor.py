@@ -47,6 +47,14 @@ try:
 except ImportError:
     sys.exit("缺少 pyserial，先执行：pip install pyserial")
 
+# 3D 打印机实况采集（Creality Moonraker / Anycubic Cloud）
+try:
+    from printers import PrinterManager, load_config
+except Exception as e:  # noqa: BLE001
+    PrinterManager = None
+    load_config = lambda: {}
+    print(f"[打印机] 模块加载失败（{e}），打印机监控不可用")
+
 
 def app_dir():
     """脚本所在目录。
@@ -651,7 +659,7 @@ def load_tune():
         return dict(DEFAULT_TUNE)
 
 
-def collect(gpu, ctemp, net, disk_want="C:/", tune=None, wp=None):
+def collect(gpu, ctemp, net, disk_want="C:/", tune=None, wp=None, pm=None):
     up, dn = net.sample()
     mem = psutil.virtual_memory()
     du = pick_disk(disk_want)
@@ -688,6 +696,10 @@ def collect(gpu, ctemp, net, disk_want="C:/", tune=None, wp=None):
         if w:
             data.update(w)
 
+    # 打印机实况：把后台线程最近一次结果并入本帧（字段缺失时设备端显示 "NO DATA"）
+    if pm is not None:
+        data.update(pm.snapshot())
+
     return data
 
 
@@ -722,6 +734,7 @@ def main():
     ap.add_argument("--disk", default="C:/", help="要监控的盘符，默认 C:/")
     ap.add_argument("--dry-run", action="store_true", help="只打印 JSON 不写串口，用于调试")
     ap.add_argument("--no-weather", action="store_true", help="关闭天气获取（不请求网络）")
+    ap.add_argument("--no-printers", action="store_true", help="关闭打印机实况获取")
     args = ap.parse_args()
 
     if args.list:
@@ -769,6 +782,17 @@ def main():
     tune = load_tune()
     tune_mtime = os.path.getmtime(TUNE_FILE) if os.path.exists(TUNE_FILE) else 0
     print(f"[调参] digit_offset={tune['digit_offset']}（改 {os.path.basename(TUNE_FILE)} 实时生效）")
+
+    # 打印机实况：后台线程定时轮询（Creality Moonraker / Anycubic Cloud）
+    pm = None
+    if not args.no_printers and PrinterManager is not None:
+        try:
+            pm = PrinterManager(load_config())
+            pm.start()
+        except Exception as e:  # noqa: BLE001
+            print(f"[打印机] 初始化失败（{e}），本会话不发送打印机数据")
+            pm = None
+
     print(f"[启动] 目标 {port or '(dry-run)'}，按 Ctrl+C 退出")
     while True:
         # 调参文件热重载：改完 json 下一帧就下发新值，屏幕立刻跟着变
@@ -795,7 +819,7 @@ def main():
                 continue
             fail = 0
         try:
-            data = collect(gpu, ctemp, net, args.disk, tune, wp)
+            data = collect(gpu, ctemp, net, args.disk, tune, wp, pm)
             line = json.dumps(data, separators=(",", ":")) + "\n"
             if args.dry_run:
                 print(line, end="")

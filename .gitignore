@@ -25,6 +25,10 @@ pc/weather_cache.json
 pc/install_result.txt
 pause.flag
 
+# ---- 打印机实况配置（含局域网 IP / 云端 token，绝不入库）----
+pc/printers.json
+pc/printer_debug.json
+
 # ---- 日志 ----
 *.log
 

@@ -251,12 +251,25 @@ struct Stats {
   char   wCityEn[24] = ""; // 城市名（英文 ASCII，字库缺字时回退）
 };
 static Stats   st;
+
+// 打印机实况（PC 端 monitor.py 经 Creality Moonraker / Anycubic Cloud 下发）
+struct PStat {
+  bool   have  = false;    // 是否已拿到过一次数据
+  char   name[16] = "";    // 打印机名（ASCII）
+  int    state = 0;        // 0离线 1空闲 2打印中
+  float  hot   = -1;       // 热端温度 °C（-1 未知）
+  float  bed   = -1;       // 热床温度 °C
+  int    prog  = -1;       // 打印进度 %（-1 未知）
+  char   file[24] = "";    // 当前文件/任务名（ASCII）
+};
+static PStat pr[2];
 static bool    hasData = false;
 static uint32_t lastPkt = 0;
 static volatile bool newData = false;   // 收到一帧完整有效数据就置位
 
 // ---- 前向声明：这些函数定义在文件后部，提前声明供渲染/解析调用 ----
 static void render();
+static void drawPrinterPage(int idx);
 void drawSelfTestPattern();
 static int daysInMonth(int y, int m);
 // 收包/错包计数（串口解析共用，定义在此以便前置使用）
@@ -476,8 +489,8 @@ static void btnPoll() {
 // ============================== 页面 / 状态 ================================
 // 三个页面用三个开关直接选；只有 ST_MON 一个状态，无菜单/无设置/无自检。
 enum UiState  { ST_MON };
-enum ViewPage { VIEW_OVERVIEW, VIEW_CLOCK, VIEW_WEATHER };   // 0总览 1大时钟 2天气（日历页已删除）
-static const int N_PAGES = 3;
+enum ViewPage { VIEW_OVERVIEW, VIEW_CLOCK, VIEW_WEATHER, VIEW_PRINTER1, VIEW_PRINTER2 };   // 0总览 1大时钟 2天气 3打印机1 4打印机2
+static const int N_PAGES = 5;
 
 static UiState  uiState = ST_MON;
 static ViewPage curView = VIEW_CLOCK;              // 开机默认进时钟页：只插电源不开机即直接是钟，0 闪屏
@@ -1339,6 +1352,73 @@ static void drawOverview() {
   pushScreen();
 }
 
+// ============================== 打印机实况页 ===============================
+// 复用总览页的环原语（jRing/mcStr）：三环 = 热端 / 热床 / 进度；顶栏放名称+状态；
+// 底部进度条 + 文件名。与已有三页共用 N_PAGES 自动轮播（离线时显示「无数据」）。
+static void drawPrinterPage(int idx) {
+  sprite.fillScreen(C_BG);
+  if (!hasData) { drawNoData(C_BG); pushScreen(); return; }
+  PStat& p = pr[idx];
+
+  if (!p.have) {
+    txtCnCenter("无数据", SCR_W / 2, 64, W_INK);
+    pushScreen();
+    return;
+  }
+
+  // ---- 顶栏：打印机名（左）+ 状态（右）----
+  sprite.fillRect(0, 0, SCR_W, HEAD_H, C_HEAD);
+  mcStr(p.name, 4, 3, J_INK, 1, 0, false);
+  const char* stx = (p.state == 2) ? "PRINTING" : (p.state == 0 ? "OFFLINE" : "IDLE");
+  uint16_t scol = (p.state == 2) ? C_ACC : (p.state == 0 ? C_DIM : W_SUB);
+  int sw = mcStrW(stx, 1, false);
+  mcStr(stx, 156 - sw, 3, scol, 1, 0, false);
+  sprite.drawLine(0, HEAD_H, SCR_W, HEAD_H, C_LINE);
+  drawPageDots();
+
+  // ---- 三环：热端(0..300C) / 热床(0..120C) / 进度 ----
+  int pctHot = (p.hot >= 0) ? constrain((int)(p.hot / 3.0f), 0, 100) : 0;
+  int pctBed = (p.bed >= 0) ? constrain((int)(p.bed / 1.2f), 0, 100) : 0;
+  int prog   = (p.prog >= 0) ? constrain(p.prog, 0, 100) : 0;
+
+  char vh[8], vb[8], vp[8];
+  if (p.hot >= 0) snprintf(vh, sizeof(vh), "%d", (int)(p.hot + 0.5f)); else strcpy(vh, "--");
+  if (p.bed >= 0) snprintf(vb, sizeof(vb), "%d", (int)(p.bed + 0.5f)); else strcpy(vb, "--");
+  if (p.prog >= 0) snprintf(vp, sizeof(vp), "%d%%", prog); else strcpy(vp, "--");
+
+  int cy = 56;
+  jRing(30,  cy, pctHot, C_ACC);
+  mcStr("HOT", 30  - mcStrW("HOT", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
+  mcStr(vh,   30  - mcStrW(vh,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+
+  jRing(80,  cy, pctBed, C_ACC);
+  mcStr("BED", 80  - mcStrW("BED", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
+  mcStr(vb,   80  - mcStrW(vb,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+
+  jRing(130, cy, prog, C_ACC);
+  mcStr("PRG", 130 - mcStrW("PRG", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
+  mcStr(vp,   130 - mcStrW(vp,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+
+  // ---- 进度条 + 文件名 ----
+  if (p.prog >= 0) {
+    int bx = 8, bw = SCR_W - 16, by = 96;
+    sprite.drawRect(bx, by, bw, 6, C_LINE);
+    sprite.fillRect(bx + 1, by + 1, (bw - 2) * prog / 100, 4, C_ACC);
+  }
+  char fn[24];
+  strlcpy(fn, p.file, sizeof(fn));
+  if (fn[0]) {
+    sprite.setTextFont(0);
+    sprite.setTextDatum(textdatum_t::top_left);
+    sprite.setTextColor(J_DIM, C_BG);
+    int fw = sprite.textWidth(fn);
+    sprite.setCursor((SCR_W - fw) / 2, 112);
+    sprite.print(fn);
+  }
+
+  pushScreen();
+}
+
 // ============================== 日期工具 ====================================
 // 仅保留 daysInMonth：时钟页离线走时用它做月末回绕（dayOfWeek 随日历页一并删除）
 static int daysInMonth(int y, int m) {
@@ -1356,7 +1436,9 @@ static void render() {
   sprite.setTextDatum(textdatum_t::top_left);
   if      (curView == VIEW_OVERVIEW) drawOverview();
   else if (curView == VIEW_CLOCK)    drawClockPage();
-  else                               drawWeatherPage();
+  else if (curView == VIEW_WEATHER)  drawWeatherPage();
+  else if (curView == VIEW_PRINTER1) drawPrinterPage(0);
+  else                               drawPrinterPage(1);
 }
 
 // ============================== 串口控制台命令 ==============================
@@ -1404,7 +1486,7 @@ static void handleLine(const char* line) {
   // 会返回 NoMemory 让整帧解析失败。给到 1024 留一倍余量（占用 loop 任务栈）。
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<1200> doc;   // 1024 在加入打印机 p1_*/p2_*（含 name/file 字符串）后偏紧，给到 1200
 #pragma GCC diagnostic pop
   DeserializationError err = deserializeJson(doc, line);
   if (err) { rxBad++; return; }
@@ -1441,6 +1523,20 @@ static void handleLine(const char* line) {
     st.wLo   = doc["wlo"] | 0.0f;
     strlcpy(st.wCity, doc["wct"] | "", sizeof(st.wCity));
     strlcpy(st.wCityEn, doc["wce"] | "", sizeof(st.wCityEn));
+  }
+
+  // 打印机实况（PC 端 printers.py 经 Creality Moonraker / Anycubic Cloud 下发，字段前缀 p1_/p2_）
+  for (int i = 0; i < 2; i++) {
+    char k[12];
+    snprintf(k, sizeof(k), "p%d_have", i + 1);
+    if (doc[k].isNull()) continue;       // 未配置/未下发 → 保持默认，不污染 pr[]
+    pr[i].have = doc[k].as<bool>();
+    snprintf(k, sizeof(k), "p%d_state", i + 1); pr[i].state = doc[k] | 0;
+    snprintf(k, sizeof(k), "p%d_hot",   i + 1); pr[i].hot   = doc[k] | -1.0f;
+    snprintf(k, sizeof(k), "p%d_bed",   i + 1); pr[i].bed   = doc[k] | -1.0f;
+    snprintf(k, sizeof(k), "p%d_prog",  i + 1); pr[i].prog  = doc[k] | -1;
+    snprintf(k, sizeof(k), "p%d_name",  i + 1); strlcpy(pr[i].name, doc[k] | "", sizeof(pr[i].name));
+    snprintf(k, sizeof(k), "p%d_file",  i + 1); strlcpy(pr[i].file, doc[k] | "", sizeof(pr[i].file));
   }
 
   // 数字垂直偏移（"do"，正=上移）与拉伸（"ds"，100=原样）：任一变化都重建位图（约 1ms）。
