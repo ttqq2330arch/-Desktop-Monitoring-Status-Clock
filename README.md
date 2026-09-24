@@ -3,17 +3,14 @@
 ESP32-WROOM-32 DevKit V1（CH340C）+ ST7735S 128×160 横放（逻辑 160×128）。
 PC 端采集本机状态 → USB 串口 1Hz 推 JSON → ESP32 负责显示。
 
-五页：**总览 / 大时钟 / 天气 / 打印机 1 / 打印机 2**，单个按键 GPIO13 循环切换；
-PC 在线时五页每 10 秒自动轮播。后两页展示 3D 打印机实时状态（Creality Moonraker 局域网 /
-纵维立方 Anycubic Cloud），详见「四 · 5 打印机实况页」。
+三页：**总览 / 大时钟 / 天气**，单个按键 GPIO13 循环切换；PC 在线时三页每 10 秒自动轮播。
 
 **★ 脱离电脑也能当钟用**：设备自带 2.4G WiFi + SNTP 对时，不接电脑时会自动进时钟页
 并显示**正确时间**（不再是一块显示「NO DATA」的砖）。配置见「二 · 6 不接电脑也能用」。
 总览页与天气页的数据仍来自 PC。
 
-**状态：固件已编译通过（2026-09-24，953,744 B / Flash 72.8% / 0 error；
-新增两页 3D 打印机实况 —— 总览 + 大时钟 + 天气 + 打印机×2 共五页）。
-（前一版 2026-09-19：931,536 B / Flash 70.6%，删除日历页、新增三页自动轮播 + WiFi 独立对时。）**
+**状态：固件已编译通过（2026-09-19，931,536 B / Flash 70.6% / RAM 16.3%，0 warning；
+已删除日历页、新增三页 10 秒自动轮播、新增 WiFi 独立对时）。**
 
 <p align="center">
   <img src="docs/img/st_full_4x.png" width="32%">
@@ -30,15 +27,6 @@ PC 在线时五页每 10 秒自动轮播。后两页展示 3D 打印机实时状
 </p>
 <p align="center"><sub>
 总览 · 3x 放大　｜　磁盘方块图标细节　｜　时钟配色备选
-</sub></p>
-
-<p align="center">
-  <img src="docs/img/real-01-weather.jpg" width="32%">
-  <img src="docs/img/real-02-clock.jpg" width="32%">
-  <img src="docs/img/real-03-overview.jpg" width="32%">
-</p>
-<p align="center"><sub>
-实物 · 天气页　｜　实物 · 翻页时钟　｜　实物 · 总览页（3D 打印外壳，模型见 <code>case/</code>）
 </sub></p>
 
 更多设计稿在 `docs/img/`，全部由 `esp32/tools/` 下的生成器离线产出。
@@ -98,10 +86,6 @@ python monitor.py               :: 自动扫 CH340
 python monitor.py --port COM6   :: 手动指定
 python monitor.py --dry-run     :: 只打印 JSON 不下发，调试用
 ```
-
-> 可选：想在小屏上看 **3D 打印机实时状态**（第 4、5 页），把 `pc/printers.json.example`
-> 复制成 `pc/printers.json` 并填好 IP / token 即可，详见「四 · 5 打印机实况页」。
-> 不配置也不影响其它页面 —— 未配时打印机页显示「无数据」。
 
 ### 3. 开机自启 + USB 看门狗
 
@@ -340,10 +324,8 @@ NET?                                      # 查看当前状态
 | 0 OVERVIEW | 四环仪表：CPU / RAM / NET / GPU 四环 + 顶部时钟 + 右侧日期（蓝=正常，≥80% 整环转红） |
 | 1 CLOCK | 彩虹电子时钟：六位糖果色数字 + 日期 + 开机时长；PC 断流 5s 后离线自走时 |
 | 2 WEATHER | 城市 + 彩虹环温（弧长=当日高低温区间位置）+ 环内糖果温度 + 高低温 / 湿度 / 风速 |
-| 3 PRINTER1 | 打印机 1：顶栏名称 + 状态；三环 HOT 热端 / BED 热床 / PRG 进度 + 进度条 + 文件名 |
-| 4 PRINTER2 | 打印机 2：同上（`pc/printers.json` 配置，见「四 · 5 打印机实况页」） |
 
-> 原「整面月视图」日历页已于 2026-09-19 删除；2026-09-24 新增两页打印机实况（页面数 3 → 5）。
+> 原「整面月视图」日历页已于 2026-09-19 删除（页面数 4 → 3）。
 
 顶栏：时间 + 日期 + 开机时长 + 页码方块。断流 5 秒后日期区显示 `OFF`。
 
@@ -449,46 +431,6 @@ HH MM SS 六张卡片式数字，每位数从 Candy Rainbow 调色板依次取�
 - **城市名回退字段必须是纯 ASCII**：设备端中文缺字时用 ASCII 字库渲染它，
   所以 `monitor.py` 会用 `CITY_EN` 把中文城市名转成拼音（安康 → ANKANG）。
 
-### 5 · 打印机实况页（打印机 1 / 打印机 2）
-
-第 4、5 页展示两台 3D 打印机的实时状态。数据由 PC 侧 `pc/printers.py` 采集，
-经同一个串口 JSON 帧下发（字段前缀 `p1_*` / `p2_*`），固件跨平台无需改动。
-
-每页内容：顶栏左侧打印机名、右侧状态（`OFFLINE` / `IDLE` / `PRINTING`，打印中为强调色）；
-中间三个环 —— **HOT** 热端温度（0–300 ℃ 映射满环）、**BED** 热床温度（0–120 ℃）、
-**PRG** 打印进度；下方进度条 + 当前文件名。没拿到数据时显示「无数据」。
-
-两种后端，按 `pc/printers.json` 里的 `type` 选：
-
-| type | 适用机型 | 取数方式 | 说明 |
-|---|---|---|---|
-| `creality_moonraker` | Ender-3 V3 / Hi / K2 等 Klipper 机型 | 局域网 `http://<IP>:7125/printer/objects/query` | **无需账号**，填 IP 即可；局域网不走代理 |
-| `anycubic_cloud` | 纵维立方 Kobra 2 / 2 Pro / X 等 | Anycubic Cloud 云账号（`XX-Token`） | 走公网，复用天气模块的强制 IPv4 + 代理回落 |
-
-配置：把 `pc/printers.json.example` 复制成 `pc/printers.json`（**同目录**）再填值。
-`printers.json` 含局域网 IP / 云端 token，**已被 `.gitignore` 排除，不会进仓库**。
-
-- Creality：填 `ip`（打印机在局域网里的地址）与 `port`（默认 7125）。
-- 纵维立方 `token` 取法：浏览器登录 `uc.makeronline.com` →
-  F12 → Application → Local Storage → 复制 `XX-Token` 的值；也可从 Slicer Next 的 `access_token` 取。
-
-已验证/需自测的字段映射：Anycubic 的云端接口字段是逆向开源集成得到，
-不同固件版本可能有出入。**若实机数据不对**，先跑一次调试抓原始 JSON：
-
-```bash
-python pc/printers.py --dump     # 轮询一次，打印归一化快照，并把原始响应存到 pc/printer_debug.json
-```
-
-把 `pc/printer_debug.json` 里的原始 JSON 贴回来，改一行映射即可。
-
-几点注意：
-
-- **打印机名与文件名会被强制转成纯 ASCII**（`printers.py` 里 `_ascii()` 丢弃非 ASCII 字符）：
-  设备端字库不含任意中文，含中文的名字会显示为空，属预期行为（可用英文名）。
-- 打印机状态变化慢，PC 侧**每 15 秒**轮询一次即可，不必 1Hz（也避免频繁打 Anycubic 云端）。
-- 不想用某台/全部打印机：把对应项 `enabled` 设为 `false`，或启动 `monitor.py` 时加 `--no-printers`。
-- 未配置 `printers.json` 时功能整体静默跳过，其余四页照常工作。
-
 ---
 
 ## 五、仓库结构
@@ -498,7 +440,7 @@ esp32/
   platformio.ini          工程配置（依赖走 lib_deps 自动下载）
   no_map.py               摘掉 -Wl,-Map，绕开中文路径导致链接失败（见第七节）
   src/
-    main.cpp              固件全部逻辑（五页渲染 / 按键 / 串口协议 / 翻转）
+    main.cpp              固件全部逻辑（三页渲染 / 按键 / 串口协议 / 翻转）
     mc_theme.h            总览页点阵字与方块图标（生成物，勿手改）
     clock_fonts.h         时钟页 4-bit alpha 数字掩码（生成物，勿手改）
     cn_font.h             中文点阵字模（已停用，保留备用）
@@ -522,7 +464,6 @@ esp32/
   tools/fonts/            时钟页用的 OFL 字体（Trebuchet MS 不在其中）
 pc/
   monitor.py              PC 端采集，1Hz 推 JSON
-  printers.py             3D 打印机状态采集（Creality Moonraker / Anycubic Cloud）
   watcher.py              USB 看门狗
   install.py / install.bat          安装与卸载计划任务
   stop_monitor.py / start_monitor.bat
@@ -530,12 +471,9 @@ pc/
   flash.py                串口烧录辅助
   test_pipeline.py        端到端自检
   weather_tune.example.json         天气配置模板
-  printers.json.example             打印机配置模板（含 IP/token 的真实文件不入库）
 docs/
   接线图.svg
   img/                    精选设计稿（生成器产出的原图在 esp32/tools/，不入库）
-drivers/                  CH340/CH341 USB 串口驱动（含一键安装 install_driver.bat）
-case/                     3D 打印外壳模型（桌面时钟.3mf）
 licenses/                 随仓库分发的字体许可全文（OFL 1.1）
 ```
 

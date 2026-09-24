@@ -44,3 +44,19 @@ void netPrintStatus(Stream& out);
 
 // 给屏幕用：极短状态词（≤4 个汉字位）
 const char* netStatusText();
+
+// ---- 网页服务支持（2026-09-24 新增）-------------------------------------
+// 默认策略是「对完时立刻关 WiFi」省电。要让设备常驻网页服务时，先调
+// netSetWifiHold(true)：此后 WiFi 保持连接（掉线自动重连），且无论 PC 在不在线
+// 都会联网。webui 模块只负责 HTTP，连网这件事仍然统一由本模块管，避免两处抢 WiFi。
+void netSetWifiHold(bool hold);
+
+// WiFi 是否已连上（网页服务可用）
+bool netWifiUp();
+
+// 本机 IP 字符串（未连上时返回 "0.0.0.0"）
+String netIpText();
+
+// 凭据读取：让配网页能列出/回填已保存的 WiFi
+int  netCredCount();
+bool netGetCred(int idx, char* ssid, size_t nSsid, char* pass, size_t nPass);

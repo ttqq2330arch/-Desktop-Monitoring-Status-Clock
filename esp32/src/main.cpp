@@ -22,6 +22,7 @@
 #include <math.h>
 #include <string.h>    // memset（时钟页 alpha 掩码清零）
 #include "netclock.h"  // 独立对时：无 PC 时用 WiFi + SNTP 取时间（凭据存 NVS，不写源码）
+#include "webui.h"     // 设备自带网页：浏览器看状态 / 填登录码（连网由 netclock 保持）
 // 注：cn_font.h（年月一~十字模）随日历页一并停用 —— 文件仍在 src/ 下，
 //     将来若要再画中文数字，重新 include 并复用其 CN_GLYPHS 即可。
 
@@ -1369,10 +1370,13 @@ static void drawPrinterPage(int idx) {
   // ---- 顶栏：打印机名（左）+ 状态（右）----
   sprite.fillRect(0, 0, SCR_W, HEAD_H, C_HEAD);
   mcStr(p.name, 4, 3, J_INK, 1, 0, false);
-  const char* stx = (p.state == 2) ? "PRINTING" : (p.state == 0 ? "OFFLINE" : "IDLE");
+  // 状态文字中文化（2026-09-24，两页统一）：打印中 / 空闲 / 未连接。
+  // 16px 字模在 17px 顶栏 y=1 恰好放下；3 字宽 52px 右对齐到 156，起点 104，
+  // 页码点最右到 x=100，不相撞。
+  const char* stx = (p.state == 2) ? "打印中" : (p.state == 0 ? "未连接" : "空闲");
   uint16_t scol = (p.state == 2) ? C_ACC : (p.state == 0 ? C_DIM : W_SUB);
-  int sw = mcStrW(stx, 1, false);
-  mcStr(stx, 156 - sw, 3, scol, 1, 0, false);
+  int sw = cnStrW(stx) - 2;   // cnStrW 按每字 18 计（含尾字间距），实宽 = n*18-2
+  drawCnStr(stx, 156 - sw, 1, scol);
   sprite.drawLine(0, HEAD_H, SCR_W, HEAD_H, C_LINE);
   drawPageDots();
 
@@ -1387,17 +1391,21 @@ static void drawPrinterPage(int idx) {
   if (p.prog >= 0) snprintf(vp, sizeof(vp), "%d%%", prog); else strcpy(vp, "--");
 
   int cy = 56;
+  // 两页统一中文环标签（2026-09-24，创想页与纵维立方页保持一致）：
+  // 16px 点阵双字 34px 宽 > 环内上限 30px(RI=17)，塞环内必顶穿环壁（实测+预览验证）
+  // ⇒ 标签放环正上方（顶栏下 y=18，16px 高恰放下），值在环内垂直居中（MC 字 7px 高 → cy-3）。
+  int vy = cy - 3;
   jRing(30,  cy, pctHot, C_ACC);
-  mcStr("HOT", 30  - mcStrW("HOT", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
-  mcStr(vh,   30  - mcStrW(vh,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+  drawCnStr("热端", 30  - 17, 18, J_LABEL);
+  mcStr(vh,   30  - mcStrW(vh,   1, true ) / 2, vy,  J_INK,   1, 0, true);
 
   jRing(80,  cy, pctBed, C_ACC);
-  mcStr("BED", 80  - mcStrW("BED", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
-  mcStr(vb,   80  - mcStrW(vb,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+  drawCnStr("热床", 80  - 17, 18, J_LABEL);
+  mcStr(vb,   80  - mcStrW(vb,   1, true ) / 2, vy,  J_INK,   1, 0, true);
 
   jRing(130, cy, prog, C_ACC);
-  mcStr("PRG", 130 - mcStrW("PRG", 1, false) / 2, cy - 12, J_LABEL, 1, 0, false);
-  mcStr(vp,   130 - mcStrW(vp,   1, true ) / 2, cy + 2,  J_INK,   1, 0, true);
+  drawCnStr("进度", 130 - 17, 18, J_LABEL);
+  mcStr(vp,   130 - mcStrW(vp,   1, true ) / 2, vy,  J_INK,   1, 0, true);
 
   // ---- 进度条 + 文件名 ----
   if (p.prog >= 0) {
@@ -1635,6 +1643,44 @@ static void handleUi() {
   }
 }
 
+// ============================== 网页状态 JSON ===============================
+// webui 通过 webSetStatusFn 注册本函数；服务端不认识 Stats/PStat 的内部结构，
+// 将来数据源从「PC 串口帧」换成「云端轮询」时只改这里，webui 不用动。
+static void jsonEsc(String& o, const char* s) {
+  o += '"';
+  for (const char* p = s; *p; ++p) {
+    char c = *p;
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if ((unsigned char)c < 0x20) o += ' ';
+    else o += c;
+  }
+  o += '"';
+}
+
+static void buildStatusJson(String& o) {
+  static const char* STXT[3] = { "离线", "空闲", "打印中" };
+  o += "{\"net\":";
+  jsonEsc(o, netStatusText());
+  o += ",\"ip\":";
+  jsonEsc(o, netIpText().c_str());
+  o += ",\"cpu\":"; o += (st.cpu < 0 ? 0 : st.cpu);
+  o += ",\"ram\":"; o += (st.mem < 0 ? 0 : st.mem);
+  o += ",\"gpu\":"; o += (st.gpu < 0 ? 0 : st.gpu);
+  for (int i = 0; i < 2; i++) {
+    o += (i == 0) ? ",\"p1\":{" : ",\"p2\":{";
+    o += "\"have\":";   o += (pr[i].have ? "true" : "false");
+    o += ",\"name\":";  jsonEsc(o, pr[i].name);
+    int s = (pr[i].state < 0 || pr[i].state > 2) ? 0 : pr[i].state;
+    o += ",\"state\":"; jsonEsc(o, STXT[s]);
+    o += ",\"hot\":";   o += (pr[i].hot < 0 ? 0 : (int)pr[i].hot);
+    o += ",\"bed\":";   o += (pr[i].bed < 0 ? 0 : (int)pr[i].bed);
+    o += ",\"prog\":";  o += (pr[i].prog < 0 ? 0 : pr[i].prog);
+    o += ",\"file\":";  jsonEsc(o, pr[i].file);
+    o += "}";
+  }
+  o += "}";
+}
+
 // ============================== 主程序 ======================================
 void setup() {
   // 背光改 PWM 调光（亮度设置用），默认满亮
@@ -1695,7 +1741,11 @@ void setup() {
 
   render();
   netBegin();   // 载入 NVS 里的 WiFi 凭据；PC 不在线时会自动联网对时
-  Serial.printf("[BOOT] render done heap=%u\n", (unsigned)ESP.getFreeHeap());
+  // 网页服务：注册状态填充器后启动。webBegin 内部会调 netSetWifiHold(true)，
+  // 让 WiFi 从「对完时即关」切成常开 —— 否则浏览器打不开设备页面。
+  webSetStatusFn(buildStatusJson);
+  webBegin();
+  Serial.printf("[BOOT] render done heap=%u web=1\n", (unsigned)ESP.getFreeHeap());
 }
 
 // ============================== 主循环 ======================================
@@ -1757,6 +1807,10 @@ void loop() {
   netPoll(now, pcTime);
   int ny, nmo, nd, nh, nmi, ns;
   if (netTakeTime(ny, nmo, nd, nh, nmi, ns)) setClock(ny, nmo, nd, nh, nmi, ns);
+
+  // 网页服务：处理浏览器请求。放在翻页过渡的 return 之前，保证每轮 loop 都被调到，
+  // 否则幕布动画那 170ms 里浏览器请求会被推迟。handleClient 处理完一个请求即返回。
+  webPoll(now);
 
   // 翻页幕布过渡：用 BG 幕布从左锚定向右展开，露出已画好的新页
   if (transActive) {

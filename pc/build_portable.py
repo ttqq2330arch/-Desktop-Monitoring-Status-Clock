@@ -58,7 +58,12 @@ BUILD_ROOT = os.path.join(os.environ.get("TEMP", r"C:\Windows\Temp"), "pcmonitor
 TARGETS = (
     # monitor 里 printers 走 try-import（可选功能），显式声明避免被静态分析漏掉，
     # 否则打包出来的 exe 会缺 printers 模块、打印机页永远「无数据」。
-    ("monitor.py", "monitor", "windowed", ["--hidden-import", "printers"]),
+    # paho.mqtt.client 在 printers.py 的 AnycubicLAN._session() 函数内 import，
+    # 静态分析同样扫不到，必须一并 hidden-import（2026-09-24 加局域网 MQTT 后端）。
+    ("monitor.py", "monitor", "windowed",
+     ["--hidden-import", "printers", "--hidden-import", "paho.mqtt.client",
+      "--hidden-import", "paho.mqtt.properties", "--hidden-import",
+      "paho.mqtt.subscribeoptions"]),
     ("flash.py", "flash", "console",
      # esptool 用 importlib 动态加载各芯片 target，静态分析扫不到，必须整个收进来
      ["--collect-submodules", "esptool", "--collect-data", "esptool"]),
@@ -475,6 +480,12 @@ def main():
         say("  printers.json.example")
     else:
         say("  缺 pc/printers.json.example（打印机配置模板未随包）")
+
+    # 本机真实配置（含内网 IP，不入库）：存在就随包带上，装好即用
+    real = os.path.join(HERE, "printers.json")
+    if os.path.isfile(real):
+        shutil.copy2(real, os.path.join(OUT_DIR, "printers.json"))
+        say("  printers.json（本机配置随包）")
 
     write_bats()
     write_readme()

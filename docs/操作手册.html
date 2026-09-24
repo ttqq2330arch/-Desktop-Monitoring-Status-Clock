@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC 状态监控 · 操作手册（朋友版）</title>
+<style>
+  :root { --ink:#1f2933; --sub:#52606d; --line:#e4e7eb; --bg:#f7f8fa; --card:#ffffff;
+          --blue:#1668dc; --green:#0f9d58; --amber:#b7791f; --red:#c53030; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--bg); color:var(--ink);
+         font:15px/1.75 "Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:24px; margin:8px 0 2px; }
+  .lead { color:var(--sub); margin:0 0 20px; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-left:10px; border-left:4px solid var(--blue); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:14px 18px; margin:10px 0; }
+  .step { display:flex; gap:12px; }
+  .num { flex:0 0 30px; height:30px; border-radius:50%; background:var(--blue); color:#fff;
+         font-weight:700; text-align:center; line-height:30px; }
+  .step b.t { font-size:16px; }
+  .hint { background:#eef6ff; border:1px solid #cfe3ff; border-radius:8px;
+          padding:8px 12px; margin:8px 0; font-size:14px; }
+  .warn { background:#fff8e6; border:1px solid #f2dcab; border-radius:8px;
+          padding:8px 12px; margin:8px 0; font-size:14px; }
+  .ok   { background:#e9f7ef; border:1px solid #bfe3cd; border-radius:8px;
+          padding:8px 12px; margin:8px 0; font-size:14px; }
+  code, .mono { font-family:Consolas,monospace; background:#eef1f4; border-radius:4px;
+                padding:1px 6px; font-size:13.5px; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; background:var(--card);
+          font-size:14px; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:#eef1f4; }
+  .kbd { border:1px solid #c9ced4; border-bottom-width:2px; border-radius:5px;
+         padding:0 6px; background:#fff; font-size:13px; }
+  .small { color:var(--sub); font-size:13px; }
+  .center { text-align:center; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>PC 状态监控 · 操作手册</h1>
+<p class="lead">一个小小的桌面屏：显示电脑运行状态（CPU / 内存 / 显卡 / 天气），
+还能顺便显示最多两台 3D 打印机的实时进度。装好之后什么都不用管，开机自动运行。</p>
+
+<h2>一、开始前 30 秒检查</h2>
+<div class="card">
+  <table>
+    <tr><th>检查项</th><th>要求</th></tr>
+    <tr><td>电脑系统</td><td>Windows 10 / 11（64 位）。Win 8.1 可用，<b>Win 7 不行</b></td></tr>
+    <tr><td>WiFi</td><td>家里要有 <b>2.4G</b> WiFi（几乎都有；只有 5G 的穿墙王路由要看清名字，<b>5G 的连不了</b>）</td></tr>
+    <tr><td>USB 线</td><td>给屏幕盒子供电的线<b>必须能传数据</b>（纯充电线不行）</td></tr>
+    <tr><td>手机</td><td>连家里同一个 WiFi（最后一步看状态用）</td></tr>
+  </table>
+</div>
+
+<h2>二、安装（一共就三步，约 5 分钟）</h2>
+
+<div class="card step"><div class="num">1</div><div>
+  <b class="t">解压</b>
+  <p>把 <code>PC监控礼盒.zip</code> 解压出来：<b>右键 → 全部解压缩</b>（或用 7-Zip / WinRAR）。
+  解压后把整个文件夹放到本地硬盘（比如 <code>D:\PC监控礼盒</code>）。
+  <span class="small">不要在 U 盘里直接运行；路径里尽量别有奇怪符号。</span></p>
+</div></div>
+
+<div class="card step"><div class="num">2</div><div>
+  <b class="t">双击「一键安装.bat」</b>
+  <p>会自动做四件事：装 USB 驱动 → 注册开机自启 → 启动采集程序 → 自检。</p>
+  <div class="warn"><b>这两个弹窗是正常的，别慌：</b><br>
+  ① 蓝色「Windows 已保护你的电脑」→ 点 <span class="kbd">更多信息</span> → <span class="kbd">仍要运行</span><br>
+  ② 杀毒软件报毒 → 选 <span class="kbd">允许</span> 或加白名单
+  （程序是打包生成的，杀软经常误报；不放心可以先让杀软扫一遍）<br>
+  ③ 弹出「用户账户控制」要管理员权限 → 点 <span class="kbd">是</span></div>
+  <div class="ok">成功标志：黑窗口最后显示采集程序日志几行、不报错，然后自动弹出本手册。</div>
+</div></div>
+
+<div class="card step"><div class="num">3</div><div>
+  <b class="t">用 USB 线把屏幕盒子插到这台电脑，双击「配WiFi.bat」</b>
+  <p>按提示输入家里的 WiFi 名称和密码（就是手机连的那个 <b>2.4G</b> WiFi）。</p>
+  <div class="ok">成功标志：窗口最后出现大字
+  <code>配网成功！手机浏览器打开 http://192.168.x.x</code>。</div>
+  <div class="hint">工具会自动认出屏幕插在哪个口；如果让你从列表里挑一个，
+  选描述像 <code>USB-SERIAL CH340</code> 或 <code>USB 串行设备</code> 的那个。</div>
+</div></div>
+
+<div class="ok"><b>完成！</b>屏幕亮起显示数据；手机连同一 WiFi，浏览器打开上面那个
+<code>http://192.168.x.x</code> 地址，就能在手机上看到同样的页面。</div>
+
+<h2>三、接 3D 打印机（可选，不接不影响电脑监控）</h2>
+
+<div class="card">
+  <p><b>纵维立方（Anycubic Kobra 系列）→ 屏幕第 5 页</b></p>
+  <table>
+    <tr><th>#</th><th>操作</th></tr>
+    <tr><td>1</td><td>打印机屏幕：<b>设置 → 局域网模式</b>，打开（开一次就一直生效）</td></tr>
+    <tr><td>2</td><td>查打印机的 IP（打印机屏幕的网络信息页，或登录路由器看设备列表）</td></tr>
+    <tr><td>3</td><td>把 <code>printers.json.example</code> 复制一份，改名 <code>printers.json</code>，用记事本打开，
+        改 printer2 那段的两行：<br>
+        <code>"name": "Kobra X"</code>（随便起名，英文数字）<br>
+        <code>"ip": "192.168.1.50"</code>（换成打印机的 IP）</td></tr>
+    <tr><td>4</td><td>双击「恢复采集.bat」。完事，屏幕和手机上都能看到打印进度</td></tr>
+  </table>
+
+  <p><b>创想（K1 / Ender-3 V3 等 Klipper 机型）→ 屏幕第 4 页</b></p>
+  <table>
+    <tr><th>#</th><th>操作</th></tr>
+    <tr><td>1</td><td>确保打印机的联网功能已开启（Klipper / Moonraker），查到 IP</td></tr>
+    <tr><td>2</td><td>同样复制改 <code>printers.json</code>，改 <b>printer1</b> 段的 <code>"ip"</code>
+        （type 和端口 7125 都不用动）</td></tr>
+    <tr><td>3</td><td>双击「恢复采集.bat」</td></tr>
+  </table>
+
+  <div class="hint"><b>强烈建议</b>：在路由器里给打印机（和屏幕盒子）绑定固定 IP
+  （DHCP 静态分配）。IP 一变就连不上了，这是「之前好好的突然断了」的头号原因。</div>
+</div>
+
+<h2>四、遇到问题？对照这张表</h2>
+<div class="card">
+  <table>
+    <tr><th style="width:34%">症状</th><th>原因与解决</th></tr>
+    <tr><td>双击 bat 一闪就没了</td>
+        <td>被拦截了。右键 bat → 属性 → 勾选「解除锁定」→ 确定，再双击；
+        或按手册第 2 步处理 SmartScreen / 杀软弹窗</td></tr>
+    <tr><td>屏幕一直停在 <code>PC MONITOR</code> 不出数据</td>
+        <td>电脑没认出串口。设备管理器里应有 <code>USB-SERIAL CH340 (COMx)</code>；
+        没有就双击 <code>drivers\CH340\install_driver.bat</code> 装驱动，装完拔插一次 USB。
+        还不行换一根<b>数据线</b></td></tr>
+    <tr><td>配网时提示找不到串口 / 让挑串口</td>
+        <td>按窗口里的列表选屏幕盒子所在的口（认 <code>CH340</code> 或
+        <code>USB 串行设备</code> 字样）；没有列表说明驱动没装好或线是充电线</td></tr>
+    <tr><td>配网 30 秒没成功</td>
+        <td>① 名称或密码输错 → 重跑「配WiFi.bat」再试；
+        ② WiFi 是 5G → 换 2.4G；③ 信号太弱 → 把设备挪近路由器</td></tr>
+    <tr><td>手机打开 <code>pcscreen.local</code> 没反应</td>
+        <td>安卓手机多数不认这个域名，<b>正常</b>——用配网工具最后显示的
+        <code>http://192.168.x.x</code> IP 地址访问。IP 变了就重新跑一次配网工具看新 IP，
+        或在路由器里绑固定 IP</td></tr>
+    <tr><td>之前能用，突然连不上了</td>
+        <td>九成是打印机/屏幕的 IP 被路由器换了 → 路由器里重新查 IP 并绑固定，
+        改 <code>printers.json</code> 后双击「恢复采集.bat」</td></tr>
+    <tr><td>打印机页温度显示 <code>--</code></td>
+        <td>刚连上的 30 秒内还没查到温度，等一下就有；一直 <code>--</code> 说明打印机
+        没在打印且待机降温了，属正常</td></tr>
+    <tr><td>天气显示 <code>NO DATA</code></td>
+        <td>天气需要联网（自动按 IP 定位）。WiFi 没配好或家里断网时正常现象</td></tr>
+    <tr><td>想改 WiFi / 换路由器了</td>
+        <td>重新跑一遍「配WiFi.bat」即可，设备支持存多组 WiFi</td></tr>
+    <tr><td>打印机开了局域网模式后手机 App 看不到它了</td>
+        <td>正常现象：局域网模式和云端二选一。本系统走局域网，不受影响</td></tr>
+    <tr><td>想搬家 / 换电脑 / 不用了</td>
+        <td>双击「卸载.bat」删掉开机自启，再把文件夹删了即可，无残留</td></tr>
+  </table>
+</div>
+
+<h2>五、日常使用与包内文件</h2>
+<div class="card">
+  <p>装好后<b>什么都不用管</b>：开机自启、拔了屏幕自动等待、再插自动重连。</p>
+  <table>
+    <tr><th>文件</th><th>用途</th></tr>
+    <tr><td>一键安装.bat</td><td>第一次安装用（只跑一次）</td></tr>
+    <tr><td>配WiFi.bat</td><td>配 / 改 WiFi，或想重新看设备 IP 时</td></tr>
+    <tr><td>暂停采集.bat / 恢复采集.bat</td><td>手动停 / 起后台程序（占串口的场景用）</td></tr>
+    <tr><td>烧录固件.bat + firmware 文件夹</td><td>重刷设备固件（出厂已烧好，一般用不到）</td></tr>
+    <tr><td>printers.json.example</td><td>打印机配置模板（复制改名 printers.json 后改两行）</td></tr>
+    <tr><td>卸载.bat</td><td>删除开机自启</td></tr>
+  </table>
+  <p class="small center">—— 有问题先看第四节表格，解决不了再问送你的人 🙂</p>
+</div>
+
+</div></body>
+</html>

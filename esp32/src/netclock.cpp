@@ -24,6 +24,10 @@ static Preferences gPrefs;
 static bool     gReady  = false;
 static uint32_t gBootMs = 0;
 
+// 网页服务需要 WiFi 常开时置 true（见 netSetWifiHold）。
+// 影响三处：① 关闭 WiFi 前先看它 ② IDLE 触发条件 ③ NC_OK 里保持连接与掉线重连
+static bool     gWifiHold = false;
+
 static char gSsid[NC_MAX_CRED][33];
 static char gPass[NC_MAX_CRED][65];
 static int  gCredN = 0;
@@ -116,6 +120,7 @@ void netRequestSync() {
 
 // ---- 状态机 ---------------------------------------------------------------
 static void ncWifiOffQuiet() {
+  if (gWifiHold) return;                    // 网页服务常驻：WiFi 要保持连接，不能关
   if (WiFi.getMode() == WIFI_OFF) return;   // 从未初始化过就别去 disconnect
   WiFi.disconnect(true, true);
   WiFi.mode(WIFI_OFF);
@@ -161,7 +166,9 @@ void netPoll(uint32_t now, bool pcTimeAvailable) {
       // 只在「没有 PC 时间源」且「从没对过 或 距上次对时超过 6 小时」时才联网。
       // PC 在线时完全不碰 WiFi：PC 每帧对齐，本来就不需要 NTP。
       bool stale = !gEver || (now - gLastOk >= NC_REFRESH);
-      bool need  = gForce || (!pcTimeAvailable && stale);
+      // ★gWifiHold（网页服务常驻）时，无论 PC 在不在线都必须联网 ——
+      //   否则「插着电脑」时 WiFi 是关的，浏览器根本打不开设备页面。
+      bool need  = gForce || gWifiHold || (!pcTimeAvailable && stale);
       if (!need) break;
       gForce = false;
       if (gCredN == 0) {                 // 没配过网：不反复空转，等配置
@@ -209,6 +216,15 @@ void netPoll(uint32_t now, bool pcTimeAvailable) {
     }
 
     case NC_OK:
+      if (gWifiHold) {
+        // 网页服务常驻：保持连接；掉线就重连（时间已拿到，重连顺带重校准一次也无害）
+        if (WiFi.status() != WL_CONNECTED) {
+          Serial.println("[NET] hold: link lost, reconnecting");
+          gTry = 0;
+          ncAttempt(now);
+        }
+        break;
+      }
       if (now - gLastOk >= NC_REFRESH) { gState = NC_IDLE; }   // 到期后由 IDLE 分支重新触发
       break;
 
@@ -250,4 +266,35 @@ void netPrintStatus(Stream& out) {
   for (int i = 0; i < gCredN; i++) out.printf(" slot%d=%s", i + 1, gSsid[i]);
   if (gEver) out.printf(" lastok=%lu s ago", (unsigned long)((millis() - gLastOk) / 1000));
   out.print("\n");
+}
+
+// ---- 网页服务支持（2026-09-24）-------------------------------------------
+// 打开 hold 后：WiFi 常开（掉线自动重连）、且 PC 在线时也照样联网。
+// 关闭后回到原来的「对完时就关」省电策略。
+void netSetWifiHold(bool hold) {
+  if (gWifiHold == hold) return;
+  gWifiHold = hold;
+  if (hold) {
+    // 正停在失败/空闲就立刻重新评估一次，不用等重试计时到点
+    if (gState == NC_FAIL || gState == NC_IDLE) { gState = NC_IDLE; gNextTry = 0; }
+  } else {
+    gNextTry = 0;
+  }
+  Serial.printf("[NET] wifi hold %s\n", hold ? "ON (web server)" : "OFF");
+}
+
+bool netWifiUp() { return WiFi.status() == WL_CONNECTED; }
+
+String netIpText() {
+  if (WiFi.status() != WL_CONNECTED) return String("0.0.0.0");
+  return WiFi.localIP().toString();
+}
+
+int netCredCount() { return gCredN; }
+
+bool netGetCred(int idx, char* ssid, size_t nSsid, char* pass, size_t nPass) {
+  if (idx < 0 || idx >= gCredN) return false;
+  if (ssid && nSsid) { strncpy(ssid, gSsid[idx], nSsid - 1); ssid[nSsid - 1] = '\0'; }
+  if (pass && nPass) { strncpy(pass, gPass[idx], nPass - 1); pass[nPass - 1] = '\0'; }
+  return true;
 }

@@ -14,9 +14,9 @@
 
   "printer2": {
     "enabled": true,
-    "type": "anycubic_cloud",
-    "name": "Anycubic",
-    "token": "PASTE_XX_Token_HERE",
-    "device_name": ""
+    "type": "anycubic_lan",
+    "name": "Kobra X",
+    "ip": "192.168.1.50",
+    "_说明2": "纵维立方须先在打印机屏幕上开启「局域网模式」（开一次即持久生效）。凭据免配置：程序启动自动从打印机 :18910 接口发现，无需填任何账号密码。进度由打印机事件推送（约 1 分钟一次），温度/状态每 30 秒主动查询一次。详见 docs/纵维立方局域网接入指南.md。"
   }
 }

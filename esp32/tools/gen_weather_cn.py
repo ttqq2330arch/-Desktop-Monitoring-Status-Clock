@@ -18,7 +18,8 @@ _BASE_DIR = _pathos.normpath(_HERE + '/..').replace('\\', '/')
 from PIL import Image, ImageDraw, ImageFont
 
 # 天气页要用到的全部汉字（去重），顺序即字模索引顺序
-CHARS = "晴间多云阴雾毛毛雨冻小中大雪粒阵雷伴冰雹最高度风速未知无数据天气低湿"
+# 2026-09-24 追加「打印空闲连接」：打印机页状态文字中文化（打印中/空闲/未连接）
+CHARS = "晴间多云阴雾毛毛雨冻小中大雪粒阵雷伴冰雹最高度风速未知无数据天气低湿热端床进打印空闲连接"
 FONT_PATH = r"C:\Windows\Fonts\simhei.ttf"
 OUT_H = _SRC_DIR + "weather_cn.h"
 GLYPH = 16
