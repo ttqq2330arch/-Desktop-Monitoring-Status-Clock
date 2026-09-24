@@ -51,7 +51,9 @@ BUILD_ROOT = os.path.join(os.environ.get("TEMP", r"C:\Windows\Temp"), "pcmonitor
 #   常驻的 monitor 必须 windowed，否则桌面一直挂黑框；
 #   flash 反过来要 console——烧录时得让用户在窗口里看到进度和报错。
 TARGETS = (
-    ("monitor.py", "monitor", "windowed", []),
+    # monitor 里 printers 走 try-import（可选功能），显式声明避免被静态分析漏掉，
+    # 否则打包出来的 exe 会缺 printers 模块、打印机页永远「无数据」。
+    ("monitor.py", "monitor", "windowed", ["--hidden-import", "printers"]),
     ("flash.py", "flash", "console",
      # esptool 用 importlib 动态加载各芯片 target，静态分析扫不到，必须整个收进来
      ["--collect-submodules", "esptool", "--collect-data", "esptool"]),
@@ -364,6 +366,11 @@ def write_readme():
   monitor.log    采集端日志：串口连上没、推了什么数据、崩了没
   flash.exe      烧录器：内含 esptool，自动扫串口，460800 波特率
   firmware\\      固件四个文件：bootloader / partitions / boot_app0 / firmware
+  printers.json.example   3D 打印机配置模板（可选）
+                 复制成 printers.json（同目录）填好即可：小屏第 4、5 页会显示
+                 两台打印机的热端/热床温度与打印进度。
+                 支持 Creality Moonraker（局域网，填 IP）与纵维立方 Anycubic Cloud
+                 （填 XX-Token）。不填也没关系，其它页面照常，这两页显示「无数据」。
 
 屏停在 PC MONITOR 怎么查
   1. 先看设备管理器有没有「未知设备 / USB-SERIAL CH340」——有黄色感叹号
@@ -444,6 +451,14 @@ def main():
     say("  拷固件")
     if not copy_firmware():
         say("  固件不全，烧录功能不可用（其余功能不受影响）")
+
+    # 打印机配置模板：用户复制成 printers.json 填 IP / token（真实文件不入库、也不随包）
+    ex = os.path.join(HERE, "printers.json.example")
+    if os.path.isfile(ex):
+        shutil.copy2(ex, os.path.join(OUT_DIR, "printers.json.example"))
+        say("  printers.json.example")
+    else:
+        say("  缺 pc/printers.json.example（打印机配置模板未随包）")
 
     write_bats()
     write_readme()

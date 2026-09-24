@@ -28,7 +28,19 @@ import http.client
 import urllib.request
 import urllib.error
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+def _app_dir():
+    """配置文件所在目录。
+
+    打包成 exe（PyInstaller 单文件）后 __file__ 指向临时解压目录 _MEIPASS，
+    直接用它会导致读不到 exe 同级的 printers.json。frozen 时改用 sys.executable
+    定位，与 monitor.py 的 app_dir() 保持一致。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+HERE = _app_dir()
 CONFIG_FILE = os.path.join(HERE, "printers.json")
 POLL_INTERVAL = 15  # 秒；打印机状态变化慢，不必 1Hz 轮询（也避免狂打 Anycubic Cloud）
 PROXY_PORTS = [7890, 7891, 10808, 10809, 1080, 8080]  # 本地代理常见端口（Clash/v2ray 等）
