@@ -23,8 +23,7 @@
 #include <string.h>    // memset（时钟页 alpha 掩码清零）
 #include "netclock.h"  // 独立对时：无 PC 时用 WiFi + SNTP 取时间（凭据存 NVS，不写源码）
 #include "webui.h"     // 设备自带网页：浏览器看状态 / 填登录码（连网由 netclock 保持）
-// 注：cn_font.h（年月一~十字模）随日历页一并停用 —— 文件仍在 src/ 下，
-//     将来若要再画中文数字，重新 include 并复用其 CN_GLYPHS 即可。
+// 注：cn_font.h（年月一~十字模）随日历页一并删除 —— 需要时用 gen_cnfont.py 重新生成。
 
 // ============================== 屏幕微调 ====================================
 #define PIN_SCK   18
