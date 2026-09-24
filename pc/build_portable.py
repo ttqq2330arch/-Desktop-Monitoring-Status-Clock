@@ -29,6 +29,11 @@
     2. 打包后 __file__ 指向临时解压目录（_MEIPASS），日志会写进去然后随进程
        退出丢失。所以 monitor.py / flash.py 里统一用 app_dir() 定位目录。
 
+依赖（打包机必须装全，缺一会打出坏 exe）
+    pip install pyinstaller esptool psutil pyserial nvidia-ml-py
+    - esptool   → flash.exe 的运行时依赖（动态 import，静态分析扫不到）
+    - pynvml(nvidia-ml-py) → monitor.exe 读 GPU（monitor.py 里 try import）
+
 用法
     python build_portable.py
 """
@@ -418,6 +423,17 @@ def main():
         say("没装 PyInstaller，先执行：pip install pyinstaller")
         return
     say("PyInstaller %s" % pyi.stdout.strip())
+
+    # ★ flash.exe 依赖 esptool：flash.py 里是 importlib 动态加载，静态分析扫不到，
+    #   靠 --collect-submodules esptool 收集。若打包环境没装 esptool，打出来的
+    #   flash.exe 一运行就 ModuleNotFoundError: No module named 'esptool'。
+    #   （曾经因为打包用的 venv 缺 esptool，导致新 flash.exe 直接不可用。）
+    es = subprocess.run([sys.executable, "-c", "import esptool; print(getattr(esptool, '__version__', 'ok'))"],
+                        capture_output=True, text=True)
+    if es.returncode != 0:
+        say("没装 esptool，flash.exe 将不可用，先执行：pip install esptool")
+        return
+    say("esptool %s" % (es.stdout or "").strip())
 
     if os.path.isdir(BUILD_ROOT):
         shutil.rmtree(BUILD_ROOT, ignore_errors=True)
