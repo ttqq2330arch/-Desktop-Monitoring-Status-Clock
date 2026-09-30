@@ -6,7 +6,8 @@
 lib/
 *.elf
 *.bin
-!esp32/firmware_prebuilt/*.bin   # 预编译固件四件套是必备附件，显式放行
+# 预编译固件四件套是必备附件，显式放行（gitignore 不支持行内注释，负模式必须独占一行）
+!esp32/firmware_prebuilt/*.bin
 *.map
 *.o
 *.d
