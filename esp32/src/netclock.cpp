@@ -28,6 +28,10 @@ static uint32_t gBootMs = 0;
 // 影响三处：① 关闭 WiFi 前先看它 ② IDLE 触发条件 ③ NC_OK 里保持连接与掉线重连
 static bool     gWifiHold = false;
 
+// 离线局域网打印机轮询需要 WiFi 常开时置 true（见 netSetLanHold）。
+// 与 gWifiHold 独立：任一位为真即保持连接，互不覆盖（否则网页/打印机谁后关谁就把对方也关了）。
+static bool     gLanHold = false;
+
 static char gSsid[NC_MAX_CRED][33];
 static char gPass[NC_MAX_CRED][65];
 static int  gCredN = 0;
@@ -120,7 +124,7 @@ void netRequestSync() {
 
 // ---- 状态机 ---------------------------------------------------------------
 static void ncWifiOffQuiet() {
-  if (gWifiHold) return;                    // 网页服务常驻：WiFi 要保持连接，不能关
+  if (gWifiHold || gLanHold) return;        // 网页服务 / 局域网轮询常驻：WiFi 要保持连接，不能关
   if (WiFi.getMode() == WIFI_OFF) return;   // 从未初始化过就别去 disconnect
   WiFi.disconnect(true, true);
   WiFi.mode(WIFI_OFF);
@@ -130,6 +134,10 @@ static void ncWifiOffQuiet() {
 static void ncAttempt(uint32_t now) {
   WiFi.persistent(false);          // 别让协议栈自己往 NVS 写东西
   WiFi.mode(WIFI_STA);
+  // ★TX 功率限到 11dBm：默认 19.5dBm 的发射电流尖峰会把弱供电（细 USB 线/弱口）
+  //  拉出 brownout 复位死循环（2026-09-30 真机实测：上电连 WiFi 即 Brownout 无限重启）。
+  //  11dBm 对同屋路由完全够用，还顺带降低对 SPI 刷屏的干扰。
+  WiFi.setTxPower(WIFI_POWER_11dBm);
   WiFi.setSleep(true);             // modem sleep：省电 + 降低对刷屏的干扰
   WiFi.begin(gSsid[gTry], gPass[gTry]);
   gT0    = now;
@@ -216,7 +224,7 @@ void netPoll(uint32_t now, bool pcTimeAvailable) {
     }
 
     case NC_OK:
-      if (gWifiHold) {
+      if (gWifiHold || gLanHold) {
         // 网页服务常驻：保持连接；掉线就重连（时间已拿到，重连顺带重校准一次也无害）
         if (WiFi.status() != WL_CONNECTED) {
           Serial.println("[NET] hold: link lost, reconnecting");
@@ -281,6 +289,18 @@ void netSetWifiHold(bool hold) {
     gNextTry = 0;
   }
   Serial.printf("[NET] wifi hold %s\n", hold ? "ON (web server)" : "OFF");
+}
+
+void netSetLanHold(bool hold) {
+  if (gLanHold == hold) return;
+  gLanHold = hold;
+  if (hold) {
+    // 正停在失败/空闲就立刻重新评估一次，不用等重试计时到点
+    if (gState == NC_FAIL || gState == NC_IDLE) { gState = NC_IDLE; gNextTry = 0; }
+  } else {
+    gNextTry = 0;
+  }
+  Serial.printf("[NET] lan wifi hold %s\n", hold ? "ON (printer LAN)" : "OFF");
 }
 
 bool netWifiUp() { return WiFi.status() == WL_CONNECTED; }

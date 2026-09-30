@@ -1,5 +1,6 @@
 #include "webui.h"
 #include "netclock.h"
+#include "printerlan.h"   // 离线局域网打印机配置（PRN: 命令同款，网页也能配）
 
 #include <WebServer.h>
 #include <ESPmDNS.h>
@@ -160,6 +161,14 @@ static void handleConfig() {
        (webToken(1).length() ? "已设置，粘贴新值可覆盖" : "粘贴登录码") + "'></textarea>";
   h += "</div>";
 
+  // 离线局域网打印机（PC 没连时，设备自己用 WiFi 直连打印机，与串口互不干涉）
+  h += "<div class='card'><div class='nm'>离线局域网打印机</div>";
+  h += "<div class='st'>PC 关机后，设备用 WiFi 直连以下打印机。留空 = 不启用该打印机离线显示</div>";
+  h += "<label>创想三维 IP（Moonraker :7125，无账号）</label><input name='ip0' placeholder='例如 192.168.1.10'>";
+  h += "<label>纵维立方 IP（Kobra X :18910 局域网模式）</label><input name='ip1' placeholder='例如 192.168.1.16'>";
+  h += "<label>显示名（可选，逗号分隔：创想名,纵维名）</label><input name='pnm' placeholder='例如 CREALITY,KOBRA X'>";
+  h += "</div>";
+
   h += "<button>保存</button></form>";
   h += "<div class='ft'><a href='/'>返回</a></div></body></html>";
   srv.send(200, "text/html; charset=utf-8", h);
@@ -192,6 +201,23 @@ static void handleSave() {
 
   if (srv.hasArg("ac")) { saveToken(0, srv.arg("ac")); msg += "Anycubic 登录码已保存<br>"; }
   if (srv.hasArg("cr")) { saveToken(1, srv.arg("cr")); msg += "创想登录码已保存<br>"; }
+
+  // 离线局域网打印机 IP
+  String ip0 = srv.arg("ip0"); ip0.trim();
+  String ip1 = srv.arg("ip1"); ip1.trim();
+  String pnm = srv.arg("pnm"); pnm.trim();
+  String nm0 = "", nm1 = "";
+  int cpos = pnm.indexOf(',');
+  if (cpos >= 0) { nm0 = pnm.substring(0, cpos); nm1 = pnm.substring(cpos + 1); }
+  else if (pnm.length()) nm0 = pnm;
+  if (ip0.length()) {
+    if (plSetPrinter(0, PL_TYPE_CREALITY, ip0.c_str(), nm0.length() ? nm0.c_str() : nullptr))
+      msg += "创想离线 IP 已保存<br>"; else msg += "创想 IP 格式有误<br>";
+  }
+  if (ip1.length()) {
+    if (plSetPrinter(1, PL_TYPE_ANYCUBIC, ip1.c_str(), nm1.length() ? nm1.c_str() : nullptr))
+      msg += "纵维离线 IP 已保存<br>"; else msg += "纵维 IP 格式有误<br>";
+  }
 
   if (wifiChanged) msg += "网络变更将在设备重启后生效。";
   else             msg += "即刻生效。";

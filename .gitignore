@@ -6,6 +6,7 @@
 lib/
 *.elf
 *.bin
+!esp32/firmware_prebuilt/*.bin   # 预编译固件四件套是必备附件，显式放行
 *.map
 *.o
 *.d

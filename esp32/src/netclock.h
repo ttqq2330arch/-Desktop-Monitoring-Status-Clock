@@ -51,6 +51,10 @@ const char* netStatusText();
 // 都会联网。webui 模块只负责 HTTP，连网这件事仍然统一由本模块管，避免两处抢 WiFi。
 void netSetWifiHold(bool hold);
 
+// 离线局域网打印机轮询也要 WiFi 常开：单独的 hold 位，和网页服务的 hold 互不覆盖
+// （任一位为真 → WiFi 保持连接）。printerlan 模块离线时置 true、在线时置 false。
+void netSetLanHold(bool hold);
+
 // WiFi 是否已连上（网页服务可用）
 bool netWifiUp();
 

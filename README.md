@@ -66,7 +66,7 @@ cd esp32
 pio run -t upload
 ```
 
-首次编译会自动下载 LovyanGFX 与 ArduinoJson（约 130 MB，只需一次）。
+首次编译会自动下载 LovyanGFX 与 ArduinoJson、PubSubClient（约 130 MB，只需一次）。
 
 **烧录前必须关掉采集脚本**——CH340C 在 DevKit V1 上硬接 UART0，脚本独占 COM 口时
 PlatformIO 抢不到端口：
@@ -75,6 +75,11 @@ PlatformIO 抢不到端口：
 cd ..\pc
 python stop_monitor.py     :: 建 pause.flag + 杀采集进程
 ```
+
+**不想搭编译环境？** `esp32/firmware_prebuilt/` 里有与源码同版本的固件四件套
+（含 md5 与烧写偏移说明），用 esptool 一条命令直烧即可。注意：工程使用**自定义
+3MB app 分区表**（`esp32/partitions.csv`，离线局域网轮询的 flash 前提），
+无论哪种烧法都必须连 `partitions.bin` 一起烧，单烧 app 会因分区不一致而异常。
 
 ### 2. 装依赖并启动采集
 
@@ -431,6 +436,27 @@ HH MM SS 六张卡片式数字，每位数从 Candy Rainbow 调色板依次取�
 - **城市名回退字段必须是纯 ASCII**：设备端中文缺字时用 ASCII 字库渲染它，
   所以 `monitor.py` 会用 `CITY_EN` 把中文城市名转成拼音（安康 → ANKANG）。
 
+### 5 · 打印机页 ×2（双源：串口 / 局域网直连，互不干涉）
+
+第 4、5 页显示两台 3D 打印机的实时状态（热端/热床温度、打印进度、文件名）。
+数据来源由「PC 是否在线」单一门控，两路天然互斥：
+
+- **PC 在线** → 走串口：`pc/printers.py` 在 PC 侧轮询打印机，随状态帧一起推给固件。
+  Creality 走局域网 Moonraker（:7125），Anycubic 走打印机局域网 MQTT
+  （Kobra X :18910 发现 → :9883 MQTT-TLS，凭据 AES-128-CBC 解密）。
+- **PC 离线** → 固件自己用 WiFi 直连打印机（`src/printerlan.cpp`），
+  打印机页照常显示，屏幕在「时钟 + 已配置打印机页」间轮播。
+
+打印机 IP 配置三入口（NVS 断电保留）：
+
+1. 串口命令：`PRN:槽位,类型,IP[,名称]`（槽 0=Creality/类型 0，槽 1=Anycubic/类型 1）、
+   `PRNCLR` 清空、`PRN?` 查询；
+2. 设备网页配置页「离线局域网打印机」卡片；
+3. 已存 NVS 时断电重启自动生效。
+
+设备状态接口 `http://<设备IP>/api/status` 里每台打印机带 `"src": "PC"/"LAN"`
+字段，可直接验证当前数据来源。
+
 ---
 
 ## 五、仓库结构
@@ -438,9 +464,12 @@ HH MM SS 六张卡片式数字，每位数从 Candy Rainbow 调色板依次取�
 ```
 esp32/
   platformio.ini          工程配置（依赖走 lib_deps 自动下载）
+  partitions.csv          自定义分区表：app 3MB（离线 LAN 轮询的 flash 前提）
   no_map.py               摘掉 -Wl,-Map，绕开中文路径导致链接失败（见第七节）
+  firmware_prebuilt/      预编译固件四件套（免编译直烧，含 md5 与偏移说明）
   src/
-    main.cpp              固件全部逻辑（三页渲染 / 按键 / 串口协议 / 翻转）
+    main.cpp              固件全部逻辑（五页渲染 / 按键 / 串口协议 / 翻转）
+    printerlan.h/.cpp     双源架构：PC 离线时 WiFi 直连打印机（Moonraker / MQTT-TLS-AES）
     mc_theme.h            总览页点阵字与方块图标（生成物，勿手改）
     clock_fonts.h         时钟页 4-bit alpha 数字掩码（生成物，勿手改）
     cn_font.h             中文点阵字模（已停用，保留备用）

@@ -22,6 +22,7 @@
 #include <math.h>
 #include <string.h>    // memset（时钟页 alpha 掩码清零）
 #include "netclock.h"  // 独立对时：无 PC 时用 WiFi + SNTP 取时间（凭据存 NVS，不写源码）
+#include "printerlan.h" // 离线局域网打印机轮询：无 PC 时用 WiFi 直连打印机（与串口互不干涉）
 #include "webui.h"     // 设备自带网页：浏览器看状态 / 填登录码（连网由 netclock 保持）
 // 注：cn_font.h（年月一~十字模）随日历页一并删除 —— 需要时用 gen_cnfont.py 重新生成。
 
@@ -252,17 +253,9 @@ struct Stats {
 };
 static Stats   st;
 
-// 打印机实况（PC 端 monitor.py 经 Creality Moonraker / Anycubic Cloud 下发）
-struct PStat {
-  bool   have  = false;    // 是否已拿到过一次数据
-  char   name[16] = "";    // 打印机名（ASCII）
-  int    state = 0;        // 0离线 1空闲 2打印中
-  float  hot   = -1;       // 热端温度 °C（-1 未知）
-  float  bed   = -1;       // 热床温度 °C
-  int    prog  = -1;       // 打印进度 %（-1 未知）
-  char   file[24] = "";    // 当前文件/任务名（ASCII）
-};
-static PStat pr[2];
+// 打印机实况：PStat 结构定义见 printerlan.h（串口与局域网两种来源共用）。
+// 定义在 main.cpp（printerlan.cpp 通过 extern 引用），渲染层只读它、不感知来源。
+PStat pr[2];
 static bool    hasData = false;
 static uint32_t lastPkt = 0;
 static volatile bool newData = false;   // 收到一帧完整有效数据就置位
@@ -1357,8 +1350,14 @@ static void drawOverview() {
 // 底部进度条 + 文件名。与已有三页共用 N_PAGES 自动轮播（离线时显示「无数据」）。
 static void drawPrinterPage(int idx) {
   sprite.fillScreen(C_BG);
-  if (!hasData) { drawNoData(C_BG); pushScreen(); return; }
+  // ★ 注意：打印机页只看「本页有没有数据(pr[idx].have)」，不卡 PC 的 hasData。
+  // 这样离线时局域网轮询填进来的数据也能正常显示（串口与 LAN 互不干涉）。
   PStat& p = pr[idx];
+  if (!p.have) {
+    txtCnCenter("无数据", SCR_W / 2, 64, W_INK);
+    pushScreen();
+    return;
+  }
 
   if (!p.have) {
     txtCnCenter("无数据", SCR_W / 2, 64, W_INK);
@@ -1480,12 +1479,16 @@ static void cmdTime(const char* arg) {
 
 // ============================== 串口解析 ====================================
 // 用固定容量文档：解析过程零堆分配，杜绝长期运行的内存碎片
+static void cmdPrn(const char* arg);   // 前向声明（定义在文件后部，handleLine 先用到）
 static void handleLine(const char* line) {
   // ---- 先分流控制台命令（非 JSON；不走 JSON 解析，也不计进坏帧）----
   if (strncmp(line, "WIFI:", 5) == 0) { cmdWifi(line + 5); return; }
   if (strncmp(line, "TIME:", 5) == 0) { cmdTime(line + 5); return; }
   if (strcmp(line, "WIFICLR") == 0)   { netClearCredentials(); return; }
   if (strcmp(line, "NET?") == 0)      { netPrintStatus(Serial); return; }
+  if (strncmp(line, "PRN:", 4) == 0)  { cmdPrn(line + 4); return; }
+  if (strcmp(line, "PRNCLR") == 0)    { plClearConfig(); return; }
+  if (strcmp(line, "PRN?") == 0)      { plPrintStatus(Serial); return; }
 
   // ArduinoJson 7 把 StaticJsonDocument 标了 deprecated，官方推荐 JsonDocument，
   // 但后者走堆分配，1Hz 常年跑下去迟早碎片。这里坚持用静态文档并局部屏蔽警告。
@@ -1642,6 +1645,44 @@ static void handleUi() {
   }
 }
 
+// 离线轮播候选页：时钟 + 已启用 LAN 的打印机页（总览/天气需要 PC，离线不进候选）
+static ViewPage nextOfflinePage(ViewPage cur) {
+  ViewPage cand[3] = { VIEW_CLOCK, VIEW_PRINTER1, VIEW_PRINTER2 };
+  int n = 0;
+  for (int i = 0; i < 3; i++) {
+    ViewPage v = cand[i];
+    if (v == VIEW_CLOCK) cand[n++] = v;
+    else if (plCfgEnabled((v == VIEW_PRINTER1) ? 0 : 1)) cand[n++] = v;
+  }
+  if (n == 0) return VIEW_CLOCK;
+  for (int i = 0; i < n; i++) if (cand[i] == cur) return cand[(i + 1) % n];
+  return cand[0];
+}
+
+// 离线打印机配置命令：PRN:slot,type,ip[,name]  PRNCLR  PRN?
+static void cmdPrn(const char* arg) {
+  char buf[128];
+  strlcpy(buf, arg, sizeof buf);
+  char* pSlot = buf;
+  char* c1 = strchr(pSlot, ',');
+  if (!c1) { Serial.println("[LAN] usage: PRN:slot,type,ip[,name]"); return; }
+  *c1 = 0;
+  char* pRest = c1 + 1;
+  char* c2 = strchr(pRest, ',');
+  if (!c2) { Serial.println("[LAN] usage: PRN:slot,type,ip[,name]"); return; }
+  *c2 = 0;
+  int slot = atoi(pSlot);
+  int type = atoi(pRest);
+  char* pIp = c2 + 1;
+  char* c3 = strchr(pIp, ',');
+  char* name = nullptr;
+  if (c3) { *c3 = 0; name = c3 + 1; }
+  if (plSetPrinter(slot, type, pIp, name))
+    Serial.printf("[LAN] ok slot=%d type=%d ip=%s\n", slot, type, pIp);
+  else
+    Serial.println("[LAN] bad (slot 0/1, type 0/1, ip must be valid IPv4)");
+}
+
 // ============================== 网页状态 JSON ===============================
 // webui 通过 webSetStatusFn 注册本函数；服务端不认识 Stats/PStat 的内部结构，
 // 将来数据源从「PC 串口帧」换成「云端轮询」时只改这里，webui 不用动。
@@ -1675,6 +1716,7 @@ static void buildStatusJson(String& o) {
     o += ",\"bed\":";   o += (pr[i].bed < 0 ? 0 : (int)pr[i].bed);
     o += ",\"prog\":";  o += (pr[i].prog < 0 ? 0 : pr[i].prog);
     o += ",\"file\":";  jsonEsc(o, pr[i].file);
+    o += ",\"src\":";   jsonEsc(o, plSrc(i) ? "LAN" : "PC");
     o += "}";
   }
   o += "}";
@@ -1740,6 +1782,7 @@ void setup() {
 
   render();
   netBegin();   // 载入 NVS 里的 WiFi 凭据；PC 不在线时会自动联网对时
+  plBegin();    // 载入 NVS 里的离线打印机配置（IP / 类型 / 名称）
   // 网页服务：注册状态填充器后启动。webBegin 内部会调 netSetWifiHold(true)，
   // 让 WiFi 从「对完时即关」切成常开 —— 否则浏览器打不开设备页面。
   webSetStatusFn(buildStatusJson);
@@ -1789,11 +1832,20 @@ void loop() {
     gFirstOnlineDone = true;                       // 首帧到达：插着电脑，升级到总览页
     if (curView != VIEW_OVERVIEW) goPage(VIEW_OVERVIEW);
   }
+  // 离线局域网轮询：在线时它自动让位给串口（不动 WiFi），离线时它用 WiFi 直连打印机。
+  plPoll(now, online);
+
   if (!online) {
-    // 运行中断流 → 守时钟（开机默认已在时钟页，这里主要处理「运行中电脑断开」的情况）。
-    if (!gOfflineHold && now > OFFLINE_MS + 1000) {
-      gOfflineHold = true;
-      if (curView != VIEW_CLOCK) goPage(VIEW_CLOCK);
+    bool lanPrinter = plCfgEnabled(0) || plCfgEnabled(1);
+    if (!lanPrinter) {
+      // 没有离线打印机 → 守时钟（原行为：开机默认已在时钟页，运行中电脑断开也回到时钟当钟用）
+      if (!gOfflineHold && now > OFFLINE_MS + 1000) {
+        gOfflineHold = true;
+        if (curView != VIEW_CLOCK) goPage(VIEW_CLOCK);
+      }
+    } else {
+      // 有离线打印机 → 解锁，允许在「时钟 / 打印机页」之间轮播，不再强制停在时钟
+      gOfflineHold = false;
     }
   } else if (gOfflineHold) {
     gOfflineHold = false;                          // PC 重新连上 → 回到总览页继续监控
@@ -1835,9 +1887,13 @@ void loop() {
 
   // 自动轮播：PC 在线时每 10 秒切下一页（总览→时钟→天气→总览），本页停留 10 秒。
   // 手动按键切页会把 pageDwellT 清零，故刚切过去不会被立刻带走。
-  // 离线（PC 关机）不轮播 —— 那时应停在时钟页当钟用，轮到总览/天气只会显示未连接。
-  if (online && now - pageDwellT >= AUTO_PAGE_MS)
+  // 离线（PC 关机）不轮播总览/天气（它们需要 PC 数据）—— 但若配置了离线打印机，
+  // 则在「时钟 + 已启用打印机页」之间轮播，让打印机页也能脱离电脑自动显示。
+  if (online && now - pageDwellT >= AUTO_PAGE_MS) {
     goPage((ViewPage)(((int)curView + 1) % N_PAGES));
+  } else if (!online && (plCfgEnabled(0) || plCfgEnabled(1)) && now - pageDwellT >= AUTO_PAGE_MS) {
+    goPage(nextOfflinePage(curView));
+  }
 
   if (uiState == ST_MON && curView == VIEW_CLOCK) {
     updateFlipDigits(true);   // 在线=随帧同步；离线=内部时钟走时，秒变即翻页
